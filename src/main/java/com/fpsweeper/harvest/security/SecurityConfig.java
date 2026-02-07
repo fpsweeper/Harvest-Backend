@@ -1,6 +1,7 @@
 package com.fpsweeper.harvest.security;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -40,6 +41,9 @@ public class SecurityConfig {
     public SecurityConfig(JwtService jwtService) {
         this.jwtService = jwtService;
     }
+
+    @Value("${app.frontend.url:http://localhost:3000}")
+    private String frontendUrl;
 
     @Autowired
     private OAuth2AuthenticationSuccessHandler customOAuth2SuccessHandler;
@@ -85,7 +89,7 @@ public class SecurityConfig {
                             System.err.println("===== OAuth2 Failure =====");
                             System.err.println("Error: " + exception.getMessage());
                             exception.printStackTrace();
-                            response.sendRedirect("http://localhost:3000/profile?twitter=error");
+                            response.sendRedirect(frontendUrl + "/profile?twitter=error");
                         })
                 );
 
@@ -189,7 +193,7 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration config = new CorsConfiguration();
-        config.setAllowedOrigins(List.of("http://localhost:3000", "https://harvest3.com" , "https://www.harvest3.com"));
+        config.setAllowedOrigins(List.of("http://localhost:3000", "https://harvest3.com" , "https://www. .com"));
         config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
         config.setAllowedHeaders(List.of("*"));
         config.setAllowCredentials(true);

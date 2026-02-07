@@ -7,6 +7,7 @@ import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -36,6 +37,9 @@ public class OAuth2AuthenticationSuccessHandler implements AuthenticationSuccess
     @Autowired
     private UserRepository userRepository;
 
+    @Value("${app.frontend.url:http://localhost:3000}")
+    private String frontendUrl;
+
     @Override
     public void onAuthenticationSuccess(
             HttpServletRequest request,
@@ -48,7 +52,7 @@ public class OAuth2AuthenticationSuccessHandler implements AuthenticationSuccess
         System.out.println("===== Custom OAuth2 Success Handler =====");
 
         if (!(authentication instanceof OAuth2AuthenticationToken oauthToken)) {
-            response.sendRedirect("http://localhost:3000/profile");
+            response.sendRedirect(frontendUrl + "/profile");
             return;
         }
 
@@ -65,7 +69,7 @@ public class OAuth2AuthenticationSuccessHandler implements AuthenticationSuccess
         if (userEmail == null || userEmail.isEmpty()) {
             System.out.println("No logged-in user found (JWT missing)");
             response.sendRedirect(
-                    "http://localhost:3000/login?error=" +
+                    frontendUrl + "/login?error=" +
                             URLEncoder.encode(
                                     "Please log in before linking Twitter",
                                     StandardCharsets.UTF_8
@@ -110,7 +114,7 @@ public class OAuth2AuthenticationSuccessHandler implements AuthenticationSuccess
 
             System.out.println("Twitter linked and security context unified");
 
-            response.sendRedirect("http://localhost:3000/profile?twitter=success");
+            response.sendRedirect(frontendUrl + "/profile?twitter=success");
 
         } catch (Exception e) {
             System.err.println("Failed to link Twitter: " + e.getMessage());
@@ -120,7 +124,7 @@ public class OAuth2AuthenticationSuccessHandler implements AuthenticationSuccess
                     URLEncoder.encode(e.getMessage(), StandardCharsets.UTF_8);
 
             response.sendRedirect(
-                    "http://localhost:3000/profile?twitter=error&message=" + errorMessage
+                    frontendUrl + "/profile?twitter=error&message=" + errorMessage
             );
         }
     }

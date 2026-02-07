@@ -14,6 +14,7 @@ import com.fpsweeper.harvest.verification.EmailVerificationRepository;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -34,6 +35,9 @@ public class AuthController {
     private final UserRepository userRepo;
     private final EmailVerificationRepository verificationRepo;
     private final PasswordEncoder passwordEncoder;
+
+    @Value("${app.environment:development}")
+    private String environment;
 
     @Autowired
     private GoogleAuthService googleAuthService;
@@ -126,14 +130,23 @@ public class AuthController {
 
         String token = jwtService.generateToken(user);
 
-        // ✅ Production-ready cookie with SameSite=None and Secure
-        // Using ResponseCookie for better control over SameSite attribute
-        String cookieValue = String.format(
-                "access_token=%s; Path=/; Max-Age=%d; HttpOnly; Secure; SameSite=None",
-                token,
-                7 * 24 * 60 * 60 // 7 days
-        );
-        response.addHeader("Set-Cookie", cookieValue);
+        String cookieValue;
+        if ("production".equals(environment)) {
+            // Production: Secure + SameSite=None for cross-origin
+            cookieValue = String.format(
+                    "access_token=%s; Path=/; Max-Age=%d; HttpOnly; Secure; SameSite=None",
+                    token,
+                    7 * 24 * 60 * 60
+            );
+        } else {
+            // Development: No Secure, SameSite=Lax
+            cookieValue = String.format(
+                    "access_token=%s; Path=/; Max-Age=%d; HttpOnly; SameSite=Lax",
+                    token,
+                    7 * 24 * 60 * 60
+            );
+        }
+                    response.addHeader("Set-Cookie", cookieValue);
 
         // Still return token for Next.js middleware
         return ResponseEntity.ok(token);
