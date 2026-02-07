@@ -96,7 +96,7 @@ public class TwitterController {
         return ResponseEntity.ok(Map.of("message", "Twitter account unlinked successfully"));
     }
 
-    @PostMapping("/api/social/twitter/prepare")
+    @PostMapping("/prepare")
     public ResponseEntity<?> prepareTwitterLink(@AuthenticationPrincipal Users user) {
         if (user == null) {
             return ResponseEntity.status(401).body(Map.of("error", "Not authenticated"));
