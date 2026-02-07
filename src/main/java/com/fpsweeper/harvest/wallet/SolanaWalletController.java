@@ -13,6 +13,8 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.core.user.OAuth2User;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.Instant;
+import java.util.Map;
 import java.util.Optional;
 
 @RestController
@@ -37,6 +39,15 @@ public class SolanaWalletController {
         SolanaWalletResponse response = walletService.linkWallet(email, request);
 
         return ResponseEntity.ok(response);
+    }
+
+    @GetMapping("/health")
+    public ResponseEntity<Map<String, String>> health() {
+        return ResponseEntity.ok(Map.of(
+                "status", "ok",
+                "service", "solana-wallet",
+                "timestamp", Instant.now().toString()
+        ));
     }
 
     @DeleteMapping("/unlink")
