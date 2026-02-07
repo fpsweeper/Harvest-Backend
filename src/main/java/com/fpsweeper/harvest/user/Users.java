@@ -46,6 +46,17 @@ public class Users {
     @Column(name = "twitter_handle")
     private String twitterHandle;
 
+    @Column(name = "discord_id")  // ✅ Add this
+    private String discordId;
+
+    public String getDiscordId() {
+        return discordId;
+    }
+
+    public void setDiscordId(String discordId) {
+        this.discordId = discordId;
+    }
+
     public String getRole() {
         return role;
     }

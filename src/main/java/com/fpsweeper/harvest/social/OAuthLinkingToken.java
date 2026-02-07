@@ -2,6 +2,7 @@ package com.fpsweeper.harvest.social;
 
 import jakarta.persistence.*;
 import java.time.Instant;
+import java.util.UUID;
 
 @Entity
 @Table(name = "oauth_linking_tokens")
@@ -23,6 +24,12 @@ public class OAuthLinkingToken {
     @PrePersist
     protected void onCreate() {
         createdAt = Instant.now();
+    }
+
+    public OAuthLinkingToken(String userEmail) {
+        this.token = UUID.randomUUID().toString();
+        this.userEmail = userEmail;
+        this.expiresAt = Instant.now().plusSeconds(600); // 10 minutes
     }
 
     // Constructors

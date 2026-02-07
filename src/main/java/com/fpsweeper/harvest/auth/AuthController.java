@@ -190,8 +190,8 @@ public class AuthController {
         return ResponseEntity.ok(token);
     }*/
     @PostMapping("/google")
-    public ResponseEntity<AuthResponse> googleAuth(@RequestBody GoogleAuthRequest request) {
-        AuthResponse response = googleAuthService.authenticateWithGoogle(request.getIdToken());
+    public ResponseEntity<GoogleAuthResponse> googleAuth(@RequestBody GoogleAuthRequest request) {
+        GoogleAuthResponse response = googleAuthService.authenticateWithGoogle(request.getIdToken());
         return ResponseEntity.ok(response);
     }
 

@@ -8,6 +8,7 @@ import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.oauth2.client.userinfo.DefaultOAuth2UserService;
 import org.springframework.web.client.RestTemplate;
 
 import java.util.*;
@@ -46,6 +47,9 @@ public class SecurityConfig {
 
     @Autowired
     private OAuth2AuthenticationSuccessHandler customOAuth2SuccessHandler;
+
+    @Autowired
+    private CustomAuthorizationRequestResolver customAuthorizationRequestResolver;
 
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
@@ -121,14 +125,26 @@ public class SecurityConfig {
                 // 6️⃣ OAuth2 (linking only)
                 // ===============================
                 .oauth2Login(oauth2 -> oauth2
-                        .userInfoEndpoint(userInfo ->
-                                userInfo.userService(twitterOAuth2UserService())
+                        .authorizationEndpoint(authorization -> authorization
+                                .authorizationRequestResolver(customAuthorizationRequestResolver)
+                        )
+                        .userInfoEndpoint(userInfo -> userInfo
+                                .userService(request -> {
+                                    String registrationId = request.getClientRegistration().getRegistrationId();
+                                    if ("twitter".equals(registrationId)) {
+                                        return twitterOAuth2UserService().loadUser(request);
+                                    } else if ("discord".equals(registrationId)) {
+                                        return discordOAuth2UserService().loadUser(request);
+                                    }
+                                    return new DefaultOAuth2UserService().loadUser(request);
+                                })
                         )
                         .successHandler(customOAuth2SuccessHandler)
                         .failureHandler((request, response, exception) -> {
                             System.err.println("===== OAuth2 Failure =====");
+                            System.err.println("Error: " + exception.getMessage());
                             exception.printStackTrace();
-                            response.sendRedirect(frontendUrl + "/profile?twitter=error");
+                            response.sendRedirect(frontendUrl + "/profile?social=error");
                         })
                 );
 
@@ -247,5 +263,82 @@ public class SecurityConfig {
     @Bean
     public PasswordEncoder passwordEncoder() {
         return new BCryptPasswordEncoder();
+    }
+
+    @Bean
+    public OAuth2UserService<OAuth2UserRequest, OAuth2User> discordOAuth2UserService() {
+        return userRequest -> {
+            System.out.println("\n===== DISCORD OAUTH USER SERVICE =====");
+
+            String accessToken = userRequest.getAccessToken().getTokenValue();
+            System.out.println("Access Token: " + accessToken.substring(0, 20) + "...");
+
+            try {
+                RestTemplate restTemplate = new RestTemplate();
+                String url = "https://discord.com/api/users/@me";
+
+                HttpHeaders headers = new HttpHeaders();
+                headers.setBearerAuth(accessToken);
+                HttpEntity<String> entity = new HttpEntity<>(headers);
+
+                System.out.println("Fetching from: " + url);
+
+                ResponseEntity<String> response = restTemplate.exchange(
+                        url,
+                        HttpMethod.GET,
+                        entity,
+                        String.class
+                );
+
+                System.out.println("Response Status: " + response.getStatusCode());
+                System.out.println("Raw Response Body:");
+                System.out.println(response.getBody());
+
+                ObjectMapper mapper = new ObjectMapper();
+                Map<String, Object> data = mapper.readValue(response.getBody(), Map.class);
+
+                System.out.println("Parsed Response: " + data);
+
+                String id = String.valueOf(data.get("id"));
+                String username = (String) data.get("username");
+                String discriminator = (String) data.get("discriminator");
+                String avatar = (String) data.get("avatar");
+                String globalName = (String) data.get("global_name");
+
+                System.out.println("Extracted:");
+                System.out.println("  ID: " + id);
+                System.out.println("  Username: " + username);
+                System.out.println("  Discriminator: " + discriminator);
+                System.out.println("  Global Name: " + globalName);
+
+                Map<String, Object> attributes = new HashMap<>();
+                attributes.put("id", id);
+                attributes.put("username", username);
+                attributes.put("discriminator", discriminator);
+                attributes.put("global_name", globalName);
+                attributes.put("avatar", avatar);
+
+                System.out.println("Final attributes: " + attributes);
+
+                OAuth2User oauth2User = new DefaultOAuth2User(
+                        Collections.singleton(new SimpleGrantedAuthority("ROLE_USER")),
+                        attributes,
+                        "id"
+                );
+
+                System.out.println("Successfully created OAuth2User");
+                System.out.println("===== DISCORD OAUTH USER SERVICE END =====\n");
+
+                return oauth2User;
+
+            } catch (Exception e) {
+                System.err.println("\n===== DISCORD OAUTH ERROR =====");
+                System.err.println("Exception: " + e.getClass().getName());
+                System.err.println("Message: " + e.getMessage());
+                e.printStackTrace();
+                System.err.println("===== ERROR END =====\n");
+                throw new RuntimeException("Failed to fetch Discord user info", e);
+            }
+        };
     }
 }

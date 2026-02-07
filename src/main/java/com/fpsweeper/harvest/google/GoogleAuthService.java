@@ -1,6 +1,8 @@
 package com.fpsweeper.harvest.google;
 
 import com.fpsweeper.harvest.auth.dto.AuthResponse;
+import com.fpsweeper.harvest.auth.dto.GoogleAuthResponse;
+import com.fpsweeper.harvest.auth.dto.UserDto;
 import com.fpsweeper.harvest.security.JwtService;
 import com.fpsweeper.harvest.user.UserRepository;
 import com.fpsweeper.harvest.user.Users;
@@ -22,7 +24,7 @@ public class GoogleAuthService {
     @Autowired
     private JwtService jwtTokenProvider;
 
-    public AuthResponse authenticateWithGoogle(String idToken) {
+    public GoogleAuthResponse authenticateWithGoogle(String idToken) {
         // 1. Verify Google token
         Payload payload = tokenVerifier.verifyToken(idToken);
         if (payload == null) {
@@ -43,24 +45,35 @@ public class GoogleAuthService {
                     if (existingUser.getAuthProvider().equals("LOCAL")) {
                         existingUser.setProviderId(googleId);
                         existingUser.setAuthProvider("GOOGLE");
+                        return userRepository.save(existingUser);
                     }
-                    return userRepository.save(existingUser);
+                    return existingUser;
                 })
                 .orElseGet(() -> {
                     // New user - create account
                     Users newUser = new Users();
                     newUser.setEmail(email);
                     newUser.setProviderId(googleId);
-                    /*newUser.setFirstName(firstName);
-                    newUser.setLastName(lastName);*/
+                /*newUser.setFirstName(firstName);
+                newUser.setLastName(lastName);*/
                     newUser.setAuthProvider("GOOGLE");
                     newUser.setEmailVerified(true); // Google verified it
+                    newUser.setRole("USER"); // ✅ Set default role
+                    newUser.setStatus("ACTIVE"); // ✅ Set status
                     return userRepository.save(newUser);
                 });
 
         // 4. Generate your JWT token
-        String jwtToken = jwtTokenProvider.generateToken(user);
+        String jwtToken = jwtTokenProvider.generateToken(user); // ✅ Use jwtService (your actual field name)
 
-        return new AuthResponse(jwtToken, "Bearer", user);
+        // 5. Create UserDto for response
+        UserDto userDto = new UserDto(
+                user.getEmail(),
+                user.getRole(),
+                user.getAuthProvider()
+        );
+
+        // 6. Return AuthResponse with token
+        return new GoogleAuthResponse(jwtToken, userDto); // ✅ Fixed constructor
     }
 }
