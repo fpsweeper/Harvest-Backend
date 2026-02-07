@@ -3,7 +3,7 @@ package com.fpsweeper.harvest.passwordreset;
 import com.fpsweeper.harvest.auth.exceptions.UserNotFoundException;
 import com.fpsweeper.harvest.auth.exceptions.GoogleSigninException;
 import com.fpsweeper.harvest.auth.exceptions.PasswordResetCodeNotFoundException;
-import com.fpsweeper.harvest.email.MailService;
+import com.fpsweeper.harvest.email.ResendEmailService;
 import com.fpsweeper.harvest.user.Users;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -13,7 +13,6 @@ import com.fpsweeper.harvest.user.UserRepository;
 
 import java.security.SecureRandom;
 import java.time.Instant;
-import java.util.UUID;
 
 @Service
 public class PasswordResetService {
@@ -25,7 +24,7 @@ public class PasswordResetService {
     private UserRepository userRepo;
 
     @Autowired
-    private MailService mailService;
+    private ResendEmailService rmailService;
 
     @Autowired
     private PasswordEncoder passwordEncoder;
@@ -65,7 +64,7 @@ public class PasswordResetService {
         String subject = "Password Reset Code - Harvest 3";
         String htmlContent = buildResetEmail(user.getEmail(), code);
 
-        mailService.sendEmail(email, subject, htmlContent);
+        rmailService.sendPasswordResetEmail(email, code);
     }
 
     @Transactional

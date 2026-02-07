@@ -2,7 +2,7 @@ package com.fpsweeper.harvest.auth;
 
 import com.fpsweeper.harvest.auth.dto.ChangePasswordRequest;
 import com.fpsweeper.harvest.auth.exceptions.*;
-import com.fpsweeper.harvest.email.MailService;
+import com.fpsweeper.harvest.email.ResendEmailService;
 import com.fpsweeper.harvest.security.JwtService;
 import com.fpsweeper.harvest.user.UserRepository;
 import com.fpsweeper.harvest.user.Users;
@@ -14,7 +14,6 @@ import org.springframework.stereotype.Service;
 
 import java.security.SecureRandom;
 import java.time.Instant;
-import java.util.Random;
 
 @Service
 public class AuthService {
@@ -22,7 +21,7 @@ public class AuthService {
     private final UserRepository userRepo;
     private final EmailVerificationRepository verificationRepo;
     private final PasswordEncoder passwordEncoder;
-    private final MailService mailService;
+    private final ResendEmailService rmailService;
 
     @Autowired
     JwtService jwtService;
@@ -30,11 +29,11 @@ public class AuthService {
     public AuthService(UserRepository userRepo,
                        EmailVerificationRepository verificationRepo,
                        PasswordEncoder passwordEncoder,
-                       MailService mailService) {
+                       ResendEmailService rmailService) {
         this.userRepo = userRepo;
         this.verificationRepo = verificationRepo;
         this.passwordEncoder = passwordEncoder;
-        this.mailService = mailService;
+        this.rmailService = rmailService;
     }
 
     public void register(String email, String password) {
@@ -58,7 +57,7 @@ public class AuthService {
             verificationRepo.save(v);
 
             // 🔥 email comes from User table
-            mailService.sendVerificationCode(userr.getEmail(), code);
+            rmailService.sendVerificationEmail(userr.getEmail(), code);
             return;
         }
 
@@ -79,7 +78,7 @@ public class AuthService {
         verificationRepo.save(v);
 
         // 🔥 email comes from User table
-        mailService.sendVerificationCode(user.getEmail(), code);
+        rmailService.sendVerificationEmail(user.getEmail(), code);
 
         // TODO: send email
         System.out.println("Verification code: " + code);
