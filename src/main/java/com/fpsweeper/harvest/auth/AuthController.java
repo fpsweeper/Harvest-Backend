@@ -100,7 +100,6 @@ public class AuthController {
         if (principal instanceof Users) {
             user = (Users) principal;
         }
-        // Handle OAuth2 authentication (after Twitter login)
         else {
             if (principal instanceof OAuth2User) {
                 OAuth2User oauth2User = (OAuth2User) principal;

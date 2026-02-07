@@ -48,23 +48,8 @@ public class SolanaWalletController {
     }
 
     @PostMapping("/wallet")
-    public ResponseEntity<?> getLinkedWallet(@AuthenticationPrincipal Object principal) {
-        if (principal == null) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(null);
-        }
+    public ResponseEntity<?> getLinkedWallet(@AuthenticationPrincipal Users user) {
 
-        Users user = null;
-
-        // Handle JWT authentication
-        if (principal instanceof Users) {
-            user = (Users) principal;
-        }
-        // Handle OAuth2 authentication
-        else if (principal instanceof OAuth2User) {
-            OAuth2User oauth2User = (OAuth2User) principal;
-            String twitterId = (String) oauth2User.getAttributes().get("id");
-            user = userRepository.findByTwitterId(twitterId).orElse(null);
-        }
 
         if (user == null) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(null);

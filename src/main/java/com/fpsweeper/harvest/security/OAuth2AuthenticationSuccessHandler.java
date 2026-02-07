@@ -2,7 +2,6 @@ package com.fpsweeper.harvest.security;
 
 import com.fpsweeper.harvest.social.OAuthLinkingToken;
 import com.fpsweeper.harvest.social.OAuthLinkingTokenRepository;
-import com.fpsweeper.harvest.social.TwitterService;
 import com.fpsweeper.harvest.social.DiscordService;
 import com.fpsweeper.harvest.user.UserRepository;
 import jakarta.servlet.http.HttpServletRequest;
@@ -25,9 +24,6 @@ import java.util.Optional;
 
 @Component
 public class OAuth2AuthenticationSuccessHandler implements AuthenticationSuccessHandler {
-
-    @Autowired
-    private TwitterService twitterService;
 
     @Autowired
     private DiscordService discordService;
@@ -84,10 +80,7 @@ public class OAuth2AuthenticationSuccessHandler implements AuthenticationSuccess
                             oauthToken.getAuthorizedClientRegistrationId(),
                             oauthToken.getName()
                     );
-
-            if ("twitter".equals(registrationId)) {
-                handleTwitterLink(oauth2User, client, userEmail, response);
-            } else if ("discord".equals(registrationId)) {
+             if ("discord".equals(registrationId)) {
                 handleDiscordLink(oauth2User, client, userEmail, response);
             } else {
                 System.err.println("Unknown OAuth provider: " + registrationId);
@@ -143,29 +136,6 @@ public class OAuth2AuthenticationSuccessHandler implements AuthenticationSuccess
         linkingTokenRepository.delete(token);
 
         return userEmail;
-    }
-
-    /**
-     * Handle Twitter account linking
-     */
-    private void handleTwitterLink(
-            OAuth2User oauth2User,
-            OAuth2AuthorizedClient client,
-            String userEmail,
-            HttpServletResponse response
-    ) throws IOException {
-        String twitterId = (String) oauth2User.getAttributes().get("id");
-        String username = (String) oauth2User.getAttributes().get("username");
-
-        System.out.println("Linking Twitter account:");
-        System.out.println("  Twitter ID: " + twitterId);
-        System.out.println("  Username: " + username);
-        System.out.println("  User Email: " + userEmail);
-
-        twitterService.linkTwitterAccount(userEmail, client);
-        System.out.println("✅ Successfully linked Twitter to user: " + userEmail);
-
-        response.sendRedirect(frontendUrl + "/profile?twitter=success");
     }
 
     /**
