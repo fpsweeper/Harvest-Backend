@@ -58,9 +58,24 @@ public class SolanaWalletController {
         return ResponseEntity.ok("Wallet unlinked successfully");
     }
 
-    @PostMapping("/wallet")
-    public ResponseEntity<?> getLinkedWallet(@AuthenticationPrincipal Users user) {
+    @GetMapping("/wallet")
+    public ResponseEntity<SolanaWalletResponse> getLinkedWallet(@AuthenticationPrincipal Object principal) {
 
+        Users user = null;
+
+        // Handle JWT authentication
+        if (principal instanceof Users) {
+            user = (Users) principal;
+        }
+        else {
+            if (principal instanceof OAuth2User) {
+                OAuth2User oauth2User = (OAuth2User) principal;
+                String twitterId = (String) oauth2User.getAttributes().get("id");
+
+                // Find user by Twitter ID
+                user = userRepository.findByTwitterId(twitterId).orElse(null);
+            }
+        }
 
         if (user == null) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(null);
