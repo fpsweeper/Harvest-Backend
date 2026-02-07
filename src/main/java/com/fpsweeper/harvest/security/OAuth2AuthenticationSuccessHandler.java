@@ -6,6 +6,7 @@ import com.fpsweeper.harvest.user.Users;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import jakarta.servlet.http.HttpSession;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -237,6 +238,19 @@ public class OAuth2AuthenticationSuccessHandler implements AuthenticationSuccess
     }
 
     private String extractEmailFromJwtCookie(HttpServletRequest request) {
+        // First, try to get from session (set before OAuth redirect)
+        HttpSession session = request.getSession(false);
+        if (session != null) {
+            String emailFromSession = (String) session.getAttribute("linking_user_email");
+            if (emailFromSession != null) {
+                System.out.println("Found email in session: " + emailFromSession);
+                // Clean up after use
+                session.removeAttribute("linking_user_email");
+                return emailFromSession;
+            }
+        }
+
+        // Fallback: try to get from JWT cookie
         if (request.getCookies() == null) {
             System.out.println("No cookies in request");
             return null;
@@ -251,7 +265,7 @@ public class OAuth2AuthenticationSuccessHandler implements AuthenticationSuccess
 
                 try {
                     String email = jwtService.extractEmail(cookie.getValue());
-                    System.out.println("Successfully extracted email: " + email);
+                    System.out.println("Successfully extracted email from JWT: " + email);
                     return email;
                 } catch (Exception e) {
                     System.err.println("Failed to extract email from cookie: " + e.getMessage());

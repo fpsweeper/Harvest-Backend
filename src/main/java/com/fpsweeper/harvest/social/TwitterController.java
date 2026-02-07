@@ -6,9 +6,11 @@ import com.fpsweeper.harvest.user.UserRepository;
 import com.fpsweeper.harvest.user.Users;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpSession;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.client.authentication.OAuth2AuthenticationToken;
 import org.springframework.security.oauth2.core.user.OAuth2User;
 import org.springframework.web.bind.annotation.*;
@@ -86,6 +88,19 @@ public class TwitterController {
 
         twitterService.unlinkTwitterAccount(userEmail);
         return ResponseEntity.ok(Map.of("message", "Twitter account unlinked successfully"));
+    }
+
+    @PostMapping("/prepare")
+    public ResponseEntity<?> prepareTwitterLink(@AuthenticationPrincipal Users user, HttpSession session) {
+        if (user == null) {
+            return ResponseEntity.status(401).body(Map.of("error", "Not authenticated"));
+        }
+
+        // Store email in session for OAuth callback
+        session.setAttribute("linking_user_email", user.getEmail());
+        System.out.println("Stored email in session for Twitter OAuth: " + user.getEmail());
+
+        return ResponseEntity.ok(Map.of("success", true));
     }
 
     private String extractEmailFromJwtCookie(HttpServletRequest request) {
