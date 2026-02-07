@@ -1,5 +1,6 @@
 package com.fpsweeper.harvest.social;
 
+import com.fpsweeper.harvest.auth.exceptions.UserNotFoundException;
 import com.fpsweeper.harvest.security.JwtService;
 import com.fpsweeper.harvest.social.dto.TwitterAccountResponse;
 import com.fpsweeper.harvest.user.UserRepository;
@@ -119,6 +120,54 @@ public class TwitterController {
                 "success", true,
                 "token", token
         ));
+    }
+
+    @PostMapping("/complete-link")
+    public ResponseEntity<?> completeTwitterLink(
+            @RequestBody Map<String, String> body,
+            @AuthenticationPrincipal Object principal) {
+
+        String linkToken = body.get("linkToken");
+
+        if (linkToken == null) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Missing token"));
+        }
+
+        // Verify token exists and is valid
+        Optional<OAuthLinkingToken> tokenOpt = linkingTokenRepository.findByToken(linkToken);
+
+        if (tokenOpt.isEmpty()) {
+            return ResponseEntity.status(404).body(Map.of("error", "Token not found"));
+        }
+
+        OAuthLinkingToken token = tokenOpt.get();
+
+        if (token.getExpiresAt().isBefore(Instant.now())) {
+            linkingTokenRepository.delete(token);
+            return ResponseEntity.status(410).body(Map.of("error", "Token expired"));
+        }
+
+        // Get user from principal (should be OAuth2User after Twitter login)
+        if (!(principal instanceof OAuth2User)) {
+            return ResponseEntity.status(401).body(Map.of("error", "Not authenticated with Twitter"));
+        }
+
+        OAuth2User oauth2User = (OAuth2User) principal;
+        String twitterId = (String) oauth2User.getAttributes().get("id");
+
+        // Verify user owns this token
+        Users user = userRepository.findByEmail(token.getUserEmail())
+                .orElseThrow(() -> new UserNotFoundException());
+
+        // Update user with Twitter ID
+        user.setTwitterId(twitterId);
+        user.setTwitterHandle((String) oauth2User.getAttributes().get("username"));
+        userRepository.save(user);
+
+        // Delete token
+        linkingTokenRepository.delete(token);
+
+        return ResponseEntity.ok(Map.of("success", true));
     }
 
     private String extractEmailFromJwtCookie(HttpServletRequest request) {
