@@ -11,6 +11,8 @@ import com.fpsweeper.harvest.user.UserRepository;
 import com.fpsweeper.harvest.user.Users;
 import com.fpsweeper.harvest.verification.EmailVerificationCodes;
 import com.fpsweeper.harvest.verification.EmailVerificationRepository;
+import com.fpsweeper.harvest.wallet.SolanaWalletRepository;
+import com.fpsweeper.harvest.wallet.SolanaWallets;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -26,6 +28,7 @@ import org.springframework.web.bind.annotation.*;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 
 @RestController
 @RequestMapping("/auth")
@@ -36,6 +39,9 @@ public class AuthController {
     private final UserRepository userRepo;
     private final EmailVerificationRepository verificationRepo;
     private final PasswordEncoder passwordEncoder;
+
+    @Autowired
+    private SolanaWalletRepository solanaWalletRepository;
 
     @Value("${app.environment:development}")
     private String environment;
@@ -114,11 +120,14 @@ public class AuthController {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(null);
         }
 
+        SolanaWallets wallet = solanaWalletRepository.findByUserId(user.getId()).orElse(null);
+
         return ResponseEntity.ok(new UserMeDto(
                 user.getId(),
                 user.getEmail(),
                 user.getRole(),
-                user.getAuthProvider()
+                user.getAuthProvider(),
+                wallet
         ));
     }
 
