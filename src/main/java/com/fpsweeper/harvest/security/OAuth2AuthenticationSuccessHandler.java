@@ -40,7 +40,10 @@ public class OAuth2AuthenticationSuccessHandler implements AuthenticationSuccess
     @Value("${app.frontend.url:http://localhost:3000}")
     private String frontendUrl;
 
-    @Override
+    @Value("${app.environment:development}")
+    private String environment;
+
+    /*@Override
     public void onAuthenticationSuccess(
             HttpServletRequest request,
             HttpServletResponse response,
@@ -127,24 +130,137 @@ public class OAuth2AuthenticationSuccessHandler implements AuthenticationSuccess
                     frontendUrl + "/profile?twitter=error&message=" + errorMessage
             );
         }
+    }*/
+
+    @Override
+    public void onAuthenticationSuccess(
+            HttpServletRequest request,
+            HttpServletResponse response,
+            Authentication authentication
+    ) throws IOException {
+
+        System.out.println("===== Custom OAuth2 Success Handler =====");
+        System.out.println("Frontend URL: " + frontendUrl);
+        System.out.println("Environment: " + environment);
+
+        if (!(authentication instanceof OAuth2AuthenticationToken oauthToken)) {
+            response.sendRedirect(frontendUrl + "/profile");
+            return;
+        }
+
+        OAuth2User oauth2User = oauthToken.getPrincipal();
+        String twitterId = (String) oauth2User.getAttributes().get("id");
+        String username  = (String) oauth2User.getAttributes().get("username");
+
+        System.out.println("Twitter ID: " + twitterId);
+        System.out.println("Twitter Username: " + username);
+
+        String userEmail = extractEmailFromJwtCookie(request);
+        System.out.println("Extracted email from JWT: " + userEmail);
+
+        if (userEmail == null || userEmail.isEmpty()) {
+            System.out.println("No logged-in user found (JWT missing)");
+            response.sendRedirect(
+                    frontendUrl + "/login?error=" +
+                            URLEncoder.encode(
+                                    "Please log in before linking Twitter",
+                                    StandardCharsets.UTF_8
+                            )
+            );
+            return;
+        }
+
+        try {
+            OAuth2AuthorizedClient client =
+                    authorizedClientService.loadAuthorizedClient(
+                            oauthToken.getAuthorizedClientRegistrationId(),
+                            oauthToken.getName()
+                    );
+
+            // 🔗 Link Twitter to existing user
+            twitterService.linkTwitterAccount(userEmail, client);
+            System.out.println("Successfully linked Twitter to user: " + userEmail);
+
+            // 🔍 Reload user from DB (now with twitter_id set)
+            Users user = userRepository.findByEmail(userEmail)
+                    .orElseThrow(() -> new IllegalStateException("User not found after Twitter link"));
+
+            // 🔐 Generate fresh JWT
+            String token = jwtService.generateToken(user);
+
+            // ✅ Set cookie with production-ready settings
+            boolean isProduction = "production".equals(environment);
+
+            String cookieValue;
+            if (isProduction) {
+                // Production: Secure + SameSite=None for cross-origin
+                cookieValue = String.format(
+                        "access_token=%s; Path=/; Max-Age=%d; HttpOnly; Secure; SameSite=None",
+                        token,
+                        7 * 24 * 60 * 60
+                );
+            } else {
+                // Development: No Secure, SameSite=Lax
+                cookieValue = String.format(
+                        "access_token=%s; Path=/; Max-Age=%d; HttpOnly; SameSite=Lax",
+                        token,
+                        7 * 24 * 60 * 60
+                );
+            }
+            response.addHeader("Set-Cookie", cookieValue);
+
+            Authentication newAuth =
+                    new UsernamePasswordAuthenticationToken(
+                            user,
+                            null,
+                            authentication.getAuthorities()
+                    );
+
+            SecurityContextHolder.getContext().setAuthentication(newAuth);
+
+            System.out.println("Twitter linked and security context unified");
+            System.out.println("Redirecting to: " + frontendUrl + "/profile?twitter=success");
+
+            response.sendRedirect(frontendUrl + "/profile?twitter=success");
+
+        } catch (Exception e) {
+            System.err.println("Failed to link Twitter: " + e.getMessage());
+            e.printStackTrace();
+
+            String errorMessage =
+                    URLEncoder.encode(e.getMessage(), StandardCharsets.UTF_8);
+
+            response.sendRedirect(
+                    frontendUrl + "/profile?twitter=error&message=" + errorMessage
+            );
+        }
     }
 
     private String extractEmailFromJwtCookie(HttpServletRequest request) {
         if (request.getCookies() == null) {
+            System.out.println("No cookies in request");
             return null;
         }
 
+        System.out.println("Searching for JWT cookie...");
         for (Cookie cookie : request.getCookies()) {
+            System.out.println("Found cookie: " + cookie.getName());
+
             if ("access_token".equals(cookie.getName()) ||
                     "authToken".equals(cookie.getName())) {
 
                 try {
-                    return jwtService.extractEmail(cookie.getValue());
+                    String email = jwtService.extractEmail(cookie.getValue());
+                    System.out.println("Successfully extracted email: " + email);
+                    return email;
                 } catch (Exception e) {
+                    System.err.println("Failed to extract email from cookie: " + e.getMessage());
                     return null;
                 }
             }
         }
+
+        System.out.println("JWT cookie not found");
         return null;
     }
 }
