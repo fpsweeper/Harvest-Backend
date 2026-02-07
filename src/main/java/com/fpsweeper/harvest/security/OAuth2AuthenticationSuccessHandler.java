@@ -1,5 +1,7 @@
 package com.fpsweeper.harvest.security;
 
+import com.fpsweeper.harvest.social.OAuthLinkingToken;
+import com.fpsweeper.harvest.social.OAuthLinkingTokenRepository;
 import com.fpsweeper.harvest.social.TwitterService;
 import com.fpsweeper.harvest.user.UserRepository;
 import com.fpsweeper.harvest.user.Users;
@@ -22,6 +24,8 @@ import org.springframework.stereotype.Component;
 import java.io.IOException;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.util.Optional;
 
 @Component
 public class OAuth2AuthenticationSuccessHandler implements AuthenticationSuccessHandler {
@@ -37,6 +41,9 @@ public class OAuth2AuthenticationSuccessHandler implements AuthenticationSuccess
 
     @Autowired
     private UserRepository userRepository;
+
+    @Autowired
+    private OAuthLinkingTokenRepository linkingTokenRepository;
 
     @Value("${app.frontend.url:http://localhost:3000}")
     private String frontendUrl;
@@ -237,8 +244,47 @@ public class OAuth2AuthenticationSuccessHandler implements AuthenticationSuccess
         }
     }
 
+    private String extractEmailFromLinkingToken(HttpServletRequest request) {
+        // Get state parameter (contains our token)
+        String state = request.getParameter("state");
+
+        if (state != null) {
+            try {
+                Optional<OAuthLinkingToken> tokenOpt = linkingTokenRepository.findByToken(state);
+
+                if (tokenOpt.isPresent()) {
+                    OAuthLinkingToken token = tokenOpt.get();
+
+                    // Check if expired
+                    if (token.getExpiresAt().isAfter(Instant.now())) {
+                        String email = token.getUserEmail();
+
+                        // Delete token after use
+                        linkingTokenRepository.delete(token);
+
+                        System.out.println("Found email from linking token: " + email);
+                        return email;
+                    } else {
+                        System.out.println("Linking token expired");
+                        linkingTokenRepository.delete(token);
+                    }
+                }
+            } catch (Exception e) {
+                System.err.println("Error reading linking token: " + e.getMessage());
+            }
+        }
+
+        return null;
+    }
+
     private String extractEmailFromJwtCookie(HttpServletRequest request) {
         // First, try to get from session (set before OAuth redirect)
+
+        String emailFromToken = extractEmailFromLinkingToken(request);
+        if (emailFromToken != null) {
+            return emailFromToken;
+        }
+
         HttpSession session = request.getSession(false);
         if (session != null) {
             String emailFromSession = (String) session.getAttribute("linking_user_email");

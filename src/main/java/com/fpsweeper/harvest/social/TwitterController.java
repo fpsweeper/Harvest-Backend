@@ -6,6 +6,7 @@ import com.fpsweeper.harvest.user.UserRepository;
 import com.fpsweeper.harvest.user.Users;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
@@ -15,8 +16,10 @@ import org.springframework.security.oauth2.client.authentication.OAuth2Authentic
 import org.springframework.security.oauth2.core.user.OAuth2User;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/social/twitter")
@@ -30,6 +33,9 @@ public class TwitterController {
 
     @Autowired
     private JwtService jwtService;
+
+    @Autowired
+    private OAuthLinkingTokenRepository linkingTokenRepository;
 
     @GetMapping
     public ResponseEntity<?> getLinkedTwitter(Authentication authentication, HttpServletRequest request) {
@@ -90,17 +96,29 @@ public class TwitterController {
         return ResponseEntity.ok(Map.of("message", "Twitter account unlinked successfully"));
     }
 
-    @PostMapping("/prepare")
-    public ResponseEntity<?> prepareTwitterLink(@AuthenticationPrincipal Users user, HttpSession session) {
+    @PostMapping("/api/social/twitter/prepare")
+    public ResponseEntity<?> prepareTwitterLink(@AuthenticationPrincipal Users user) {
         if (user == null) {
             return ResponseEntity.status(401).body(Map.of("error", "Not authenticated"));
         }
 
-        // Store email in session for OAuth callback
-        session.setAttribute("linking_user_email", user.getEmail());
-        System.out.println("Stored email in session for Twitter OAuth: " + user.getEmail());
+        // Generate unique token
+        String token = UUID.randomUUID().toString();
 
-        return ResponseEntity.ok(Map.of("success", true));
+        // Store token with email (expires in 10 minutes)
+        OAuthLinkingToken linkingToken = new OAuthLinkingToken();
+        linkingToken.setToken(token);
+        linkingToken.setUserEmail(user.getEmail());
+        linkingToken.setExpiresAt(Instant.now().plusSeconds(600));
+
+        linkingTokenRepository.save(linkingToken);
+
+        System.out.println("Created linking token for: " + user.getEmail());
+
+        return ResponseEntity.ok(Map.of(
+                "success", true,
+                "token", token
+        ));
     }
 
     private String extractEmailFromJwtCookie(HttpServletRequest request) {
