@@ -104,8 +104,42 @@ public class AuthController {
         ));
     }
 
-
     @PostMapping("/login")
+    public ResponseEntity<String> login(
+            @RequestBody LoginRequest req,
+            HttpServletResponse response) {
+
+        Users user = userRepo.findByEmail(req.getEmail())
+                .orElseThrow(InvalidCredentialsException::new);
+
+        if (user.getAuthProvider().equals("GOOGLE")) {
+            throw new GoogleSigninException();
+        }
+
+        if (!user.isEmailVerified()) {
+            throw new EmailNotVerifiedException();
+        }
+
+        if (!passwordEncoder.matches(req.getPassword(), user.getPasswordHash())) {
+            throw new InvalidCredentialsException();
+        }
+
+        String token = jwtService.generateToken(user);
+
+        // ✅ Production-ready cookie with SameSite=None and Secure
+        // Using ResponseCookie for better control over SameSite attribute
+        String cookieValue = String.format(
+                "access_token=%s; Path=/; Max-Age=%d; HttpOnly; Secure; SameSite=None",
+                token,
+                7 * 24 * 60 * 60 // 7 days
+        );
+        response.addHeader("Set-Cookie", cookieValue);
+
+        // Still return token for Next.js middleware
+        return ResponseEntity.ok(token);
+    }
+
+    /*@PostMapping("/login")
     public ResponseEntity<String> login(
             @RequestBody LoginRequest req,
             HttpServletResponse response) {
@@ -137,7 +171,7 @@ public class AuthController {
 
         // Still return token for Next.js middleware
         return ResponseEntity.ok(token);
-    }
+    }*/
     @PostMapping("/google")
     public ResponseEntity<AuthResponse> googleAuth(@RequestBody GoogleAuthRequest request) {
         AuthResponse response = googleAuthService.authenticateWithGoogle(request.getIdToken());
