@@ -58,9 +58,7 @@ public class OAuth2AuthenticationSuccessHandler implements AuthenticationSuccess
             Authentication authentication
     ) throws IOException {
 
-        System.out.println("===== Custom OAuth2 Success Handler =====");
-        System.out.println("Frontend URL: " + frontendUrl);
-        System.out.println("Environment: " + environment);
+        System.out.println("===== Custom OAuth2 Success Handler (Bearer) =====");
 
         if (!(authentication instanceof OAuth2AuthenticationToken oauthToken)) {
             response.sendRedirect(frontendUrl + "/profile");
@@ -74,46 +72,62 @@ public class OAuth2AuthenticationSuccessHandler implements AuthenticationSuccess
         System.out.println("Twitter ID: " + twitterId);
         System.out.println("Twitter Username: " + username);
 
-        // ✅ Check for linking token first
-        String linkToken = request.getParameter("link_token");
+        // ===============================
+        // 1️⃣ Try link_token first
+        // ===============================
+
+        String linkToken = request.getParameter("statte");
         String userEmail = null;
 
         if (linkToken != null) {
-            System.out.println("Found link_token parameter: " + linkToken);
-            Optional<OAuthLinkingToken> tokenOpt = linkingTokenRepository.findByToken(linkToken);
+            System.out.println("Found link_token: " + linkToken);
+
+            Optional<OAuthLinkingToken> tokenOpt =
+                    linkingTokenRepository.findByToken(linkToken);
 
             if (tokenOpt.isPresent()) {
                 OAuthLinkingToken token = tokenOpt.get();
+                System.out.println("Token found in DB: " + token.getToken() + ", email=" + token.getUserEmail() + ", expires=" + token.getExpiresAt());
 
                 if (token.getExpiresAt().isAfter(Instant.now())) {
                     userEmail = token.getUserEmail();
-                    System.out.println("Found email from linking token: " + userEmail);
-                    linkingTokenRepository.delete(token);
+                    System.out.println("Resolved user from link_token: " + userEmail);
                 } else {
                     System.out.println("Linking token expired");
-                    linkingTokenRepository.delete(token);
                 }
+
+                linkingTokenRepository.delete(token);
             }
+
         }
 
-        // ✅ Fallback to JWT cookie
+        // ===============================
+        // 2️⃣ Fallback: Authorization Bearer JWT
+        // ===============================
         if (userEmail == null) {
-            userEmail = extractEmailFromJwtCookie(request);
-            System.out.println("Extracted email from JWT: " + userEmail);
+            userEmail = extractEmailFromAuthorizationHeader(request);
+            System.out.println("Resolved user from Authorization header: " + userEmail);
         }
 
-        if (userEmail == null || userEmail.isEmpty()) {
-            System.out.println("No logged-in user found (JWT missing)");
+        // ===============================
+        // 3️⃣ No user → reject
+        // ===============================
+        if (userEmail == null || userEmail.isBlank()) {
+            System.out.println("No authenticated user found");
+
             response.sendRedirect(
                     frontendUrl + "/login?error=" +
                             URLEncoder.encode(
-                                    "Please log in before linking Twitter",
+                                    "Please log in before linking X",
                                     StandardCharsets.UTF_8
                             )
             );
             return;
         }
 
+        // ===============================
+        // 4️⃣ Link Twitter account
+        // ===============================
         try {
             OAuth2AuthorizedClient client =
                     authorizedClientService.loadAuthorizedClient(
@@ -122,39 +136,33 @@ public class OAuth2AuthenticationSuccessHandler implements AuthenticationSuccess
                     );
 
             twitterService.linkTwitterAccount(userEmail, client);
-            System.out.println("Successfully linked Twitter to user: " + userEmail);
 
-            Users user = userRepository.findByEmail(userEmail)
-                    .orElseThrow(() -> new IllegalStateException("User not found after Twitter link"));
-
-            String token = jwtService.generateToken(user);
-
-            // ✅ Set cookie with production settings and correct domain
-            // ✅ Remove Domain parameter
-            String cookieValue = String.format(
-                    "access_token=%s; Path=/; Max-Age=%d; HttpOnly; Secure; SameSite=None",
-                    token,
-                    7 * 24 * 60 * 60
-            );
-            response.addHeader("Set-Cookie", cookieValue);
-
-            System.out.println("Twitter linked successfully");
-            System.out.println("Redirecting to: " + frontendUrl + "/profile?twitter=success");
+            System.out.println("Successfully linked X for user: " + userEmail);
 
             response.sendRedirect(frontendUrl + "/profile?twitter=success");
 
         } catch (Exception e) {
-            System.err.println("Failed to link Twitter: " + e.getMessage());
             e.printStackTrace();
 
-            String errorMessage =
-                    URLEncoder.encode(e.getMessage(), StandardCharsets.UTF_8);
-
             response.sendRedirect(
-                    frontendUrl + "/profile?twitter=error&message=" + errorMessage
+                    frontendUrl + "/profile?twitter=error&message=" +
+                            URLEncoder.encode(e.getMessage(), StandardCharsets.UTF_8)
             );
         }
     }
+
+
+    private String extractEmailFromAuthorizationHeader(HttpServletRequest request) {
+        String authHeader = request.getHeader("Authorization");
+
+        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+            return null;
+        }
+
+        String token = authHeader.substring(7);
+        return jwtService.extractEmail(token);
+    }
+
     private String extractEmailFromLinkingToken(HttpServletRequest request) {
         // Get state parameter (contains our token)
         String state = request.getParameter("state");

@@ -146,12 +146,12 @@ public class AuthController {
         String token = jwtService.generateToken(user);
 
         // ✅ DON'T set Domain - let browser handle it
-        String cookieValue = String.format(
+        /*String cookieValue = String.format(
                 "access_token=%s; Path=/; Max-Age=%d; HttpOnly; Secure; SameSite=None",
                 token,
                 7 * 24 * 60 * 60
         );
-        response.addHeader("Set-Cookie", cookieValue);
+        response.addHeader("Set-Cookie", cookieValue);*/
 
         return ResponseEntity.ok(token);
     }

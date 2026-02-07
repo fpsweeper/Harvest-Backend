@@ -37,7 +37,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             return;
         }
 
-        String token = extractTokenFromCookies(request);
+        String token = extractToken(request);
 
         if (token != null && jwtService.isTokenValid(token)) {
             try {
@@ -59,14 +59,23 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     }
 
 
-    private String extractTokenFromCookies(HttpServletRequest request) {
-        if (request.getCookies() == null) return null;
+    private String extractToken(HttpServletRequest request) {
+        // 1️⃣ Check Authorization header
+        String authHeader = request.getHeader("Authorization");
+        if (authHeader != null && authHeader.startsWith("Bearer ")) {
+            return authHeader.substring(7); // remove "Bearer "
+        }
 
-        for (Cookie cookie : request.getCookies()) {
-            if ("access_token".equals(cookie.getName())) {
-                return cookie.getValue();
+        // 2️⃣ Fallback: check cookies
+        if (request.getCookies() != null) {
+            for (Cookie cookie : request.getCookies()) {
+                if ("access_token".equals(cookie.getName())) {
+                    return cookie.getValue();
+                }
             }
         }
-        return null;
+
+        return null; // no token found
     }
+
 }

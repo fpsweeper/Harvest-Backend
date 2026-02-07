@@ -1,5 +1,6 @@
 package com.fpsweeper.harvest.security;
 
+import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpMethod;
@@ -48,15 +49,44 @@ public class SecurityConfig {
 
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+
         http
+                // ===============================
+                // 1️⃣ Stateless error handling
+                // ===============================
+                .exceptionHandling(ex -> ex
+                        .defaultAuthenticationEntryPointFor(
+                                (request, response, authException) -> {
+                                    response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                                    response.setContentType("application/json");
+                                    response.getWriter().write("{\"error\":\"Unauthorized\"}");
+                                },
+                                request ->
+                                        request.getRequestURI().startsWith("/api/")
+                                                || request.getRequestURI().startsWith("/auth/")
+                        )
+                )
+
+                // ===============================
+                // 2️⃣ CORS + CSRF
+                // ===============================
                 .cors(Customizer.withDefaults())
                 .csrf(csrf -> csrf.disable())
+
+                // ===============================
+                // 3️⃣ Stateless session policy
+                // ===============================
                 .sessionManagement(session ->
-                        {session.sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED);
-                        session.sessionFixation().none();}
+                        session.sessionCreationPolicy(SessionCreationPolicy.STATELESS)
                 )
+
+                // ===============================
+                // 4️⃣ Authorization rules
+                // ===============================
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
+
+                        // Public endpoints
                         .requestMatchers(
                                 "/oauth2/**",
                                 "/login/oauth2/**",
@@ -68,25 +98,35 @@ public class SecurityConfig {
                                 "/auth/forgot-password",
                                 "/auth/reset-password"
                         ).permitAll()
+
+                        // Protected endpoints
                         .requestMatchers(
                                 "/auth/me",
                                 "/api/wallet/solana/**",
                                 "/api/social/**"
                         ).authenticated()
+
                         .anyRequest().authenticated()
                 )
+
+                // ===============================
+                // 5️⃣ JWT authentication filter
+                // ===============================
                 .addFilterBefore(
                         new JwtAuthenticationFilter(jwtService),
                         UsernamePasswordAuthenticationFilter.class
                 )
+
+                // ===============================
+                // 6️⃣ OAuth2 (linking only)
+                // ===============================
                 .oauth2Login(oauth2 -> oauth2
-                        .userInfoEndpoint(userInfo -> userInfo
-                                .userService(twitterOAuth2UserService())
+                        .userInfoEndpoint(userInfo ->
+                                userInfo.userService(twitterOAuth2UserService())
                         )
-                        .successHandler(customOAuth2SuccessHandler)  // Use custom handler
+                        .successHandler(customOAuth2SuccessHandler)
                         .failureHandler((request, response, exception) -> {
                             System.err.println("===== OAuth2 Failure =====");
-                            System.err.println("Error: " + exception.getMessage());
                             exception.printStackTrace();
                             response.sendRedirect(frontendUrl + "/profile?twitter=error");
                         })

@@ -39,47 +39,17 @@ public class TwitterController {
     private OAuthLinkingTokenRepository linkingTokenRepository;
 
     @GetMapping
-    public ResponseEntity<?> getLinkedTwitter(Authentication authentication, HttpServletRequest request) {
-        System.out.println("===== GET TWITTER ACCOUNT =====");
-        System.out.println("Authentication type: " + authentication.getClass().getName());
-        System.out.println("Principal: " + authentication.getPrincipal());
-
-        String userEmail = null;
-
-        // Check if this is OAuth2 authentication (after Twitter linking)
-        if (authentication instanceof OAuth2AuthenticationToken) {
-            OAuth2AuthenticationToken oauthToken = (OAuth2AuthenticationToken) authentication;
-            OAuth2User oauth2User = oauthToken.getPrincipal();
-            String twitterId = (String) oauth2User.getAttributes().get("id");
-
-            System.out.println("OAuth2 authentication detected - Twitter ID: " + twitterId);
-
-            // Try to find user by Twitter ID
-            Optional<Users> userByTwitter = userRepository.findByTwitterId(twitterId);
-            if (userByTwitter.isPresent()) {
-                userEmail = userByTwitter.get().getEmail();
-                System.out.println("Found user by Twitter ID: " + userEmail);
-            } else {
-                // Try to extract email from JWT cookie as fallback
-                userEmail = extractEmailFromJwtCookie(request);
-                System.out.println("User not found by Twitter ID, tried JWT: " + userEmail);
-            }
-        } else {
-            // Regular JWT authentication
-            userEmail = extractEmailFromJwtCookie(request);
-            System.out.println("JWT authentication - Email: " + userEmail);
+    public ResponseEntity<?> getLinkedTwitter(@AuthenticationPrincipal Users user) {
+        if (user == null) {
+            return ResponseEntity.status(401).build();
         }
 
-        if (userEmail == null || userEmail.isEmpty()) {
-            return ResponseEntity.status(403).body(Map.of(
-                    "error", "Not authenticated or no user found"
-            ));
-        }
-
-        Optional<TwitterAccountResponse> twitter = twitterService.getLinkedTwitterAccount(userEmail);
-        return twitter.map(ResponseEntity::ok)
+        return twitterService
+                .getLinkedTwitterAccount(user.getEmail())
+                .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
     }
+
 
     @DeleteMapping("/unlink")
     public ResponseEntity<?> unlinkTwitter(Authentication authentication, HttpServletRequest request) {
@@ -98,28 +68,17 @@ public class TwitterController {
     }
 
     @PostMapping("/prepare")
-    public ResponseEntity<?> prepareTwitterLink(@AuthenticationPrincipal Users user) {
-        if (user == null) {
-            return ResponseEntity.status(401).body(Map.of("error", "Not authenticated"));
-        }
+    public ResponseEntity<?> prepareTwitterLink(@RequestHeader("Authorization") String bearer) {
+        String email = jwtService.extractEmail(bearer.substring(7));
 
-        // Generate unique token
-        String token = UUID.randomUUID().toString();
-
-        // Store token with email (expires in 10 minutes)
-        OAuthLinkingToken linkingToken = new OAuthLinkingToken();
-        linkingToken.setToken(token);
-        linkingToken.setUserEmail(user.getEmail());
-        linkingToken.setExpiresAt(Instant.now().plusSeconds(600));
-
-        linkingTokenRepository.save(linkingToken);
-
-        System.out.println("Created linking token for: " + user.getEmail());
-
-        return ResponseEntity.ok(Map.of(
-                "success", true,
-                "token", token
-        ));
+        OAuthLinkingToken token = new OAuthLinkingToken();
+        token.setUserEmail(email);
+        token.setToken(UUID.randomUUID().toString());
+        token.setExpiresAt(Instant.now().plusSeconds(600)); // 10min
+        linkingTokenRepository.save(token);
+        System.out.println("Sending the linking token : " + token.getToken() + " With email " + email);
+        Map<String, String> res = Map.of("token", token.getToken());
+        return ResponseEntity.ok(res);
     }
 
     @PostMapping("/complete-link")
