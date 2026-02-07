@@ -12,6 +12,7 @@ import com.fpsweeper.harvest.user.Users;
 import com.fpsweeper.harvest.verification.EmailVerificationCodes;
 import com.fpsweeper.harvest.verification.EmailVerificationRepository;
 import jakarta.servlet.http.Cookie;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -74,7 +75,21 @@ public class AuthController {
 
     // ✅ CURRENT USER (JWT REQUIRED)
     @GetMapping("/me")
-    public ResponseEntity<UserMeDto> me(@AuthenticationPrincipal Object principal) {
+    public ResponseEntity<UserMeDto> me(@AuthenticationPrincipal Object principal, HttpServletRequest request) {
+        System.out.println("===== /auth/me REQUEST =====");
+        if (request.getCookies() != null) {
+            for (Cookie cookie : request.getCookies()) {
+                System.out.println("Cookie: " + cookie.getName() + " = " + cookie.getValue().substring(0, Math.min(20, cookie.getValue().length())) + "...");
+            }
+        } else {
+            System.out.println("NO COOKIES RECEIVED");
+        }
+
+        if (principal == null) {
+            System.out.println("Principal is NULL");
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(null);
+        }
+
         if (principal == null) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(null);
         }
@@ -130,25 +145,14 @@ public class AuthController {
 
         String token = jwtService.generateToken(user);
 
-        String cookieValue;
-        if ("production".equals(environment)) {
-            // Production: Secure + SameSite=None for cross-origin
-            cookieValue = String.format(
-                    "access_token=%s; Path=/; Domain=.harvest3.com; Max-Age=%d; HttpOnly; Secure; SameSite=None",
-                    token,
-                    7 * 24 * 60 * 60
-            );
-        } else {
-            // Development: No Secure, SameSite=Lax
-            cookieValue = String.format(
-                    "access_token=%s; Path=/; Max-Age=%d; HttpOnly; SameSite=Lax",
-                    token,
-                    7 * 24 * 60 * 60
-            );
-        }
-                    response.addHeader("Set-Cookie", cookieValue);
+        // ✅ DON'T set Domain - let browser handle it
+        String cookieValue = String.format(
+                "access_token=%s; Path=/; Max-Age=%d; HttpOnly; Secure; SameSite=None",
+                token,
+                7 * 24 * 60 * 60
+        );
+        response.addHeader("Set-Cookie", cookieValue);
 
-        // Still return token for Next.js middleware
         return ResponseEntity.ok(token);
     }
 

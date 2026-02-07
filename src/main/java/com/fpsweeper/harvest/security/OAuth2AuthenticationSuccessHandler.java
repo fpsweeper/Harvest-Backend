@@ -57,13 +57,104 @@ public class OAuth2AuthenticationSuccessHandler implements AuthenticationSuccess
             HttpServletResponse response,
             Authentication authentication
     ) throws IOException {
+
         System.out.println("===== Custom OAuth2 Success Handler =====");
-        System.out.println("Redirecting to frontend");
+        System.out.println("Frontend URL: " + frontendUrl);
+        System.out.println("Environment: " + environment);
 
-        // Just redirect to frontend - let frontend handle the completion
-        response.sendRedirect(frontendUrl + "/profile?twitter=success");
+        if (!(authentication instanceof OAuth2AuthenticationToken oauthToken)) {
+            response.sendRedirect(frontendUrl + "/profile");
+            return;
+        }
+
+        OAuth2User oauth2User = oauthToken.getPrincipal();
+        String twitterId = (String) oauth2User.getAttributes().get("id");
+        String username  = (String) oauth2User.getAttributes().get("username");
+
+        System.out.println("Twitter ID: " + twitterId);
+        System.out.println("Twitter Username: " + username);
+
+        // ✅ Check for linking token first
+        String linkToken = request.getParameter("link_token");
+        String userEmail = null;
+
+        if (linkToken != null) {
+            System.out.println("Found link_token parameter: " + linkToken);
+            Optional<OAuthLinkingToken> tokenOpt = linkingTokenRepository.findByToken(linkToken);
+
+            if (tokenOpt.isPresent()) {
+                OAuthLinkingToken token = tokenOpt.get();
+
+                if (token.getExpiresAt().isAfter(Instant.now())) {
+                    userEmail = token.getUserEmail();
+                    System.out.println("Found email from linking token: " + userEmail);
+                    linkingTokenRepository.delete(token);
+                } else {
+                    System.out.println("Linking token expired");
+                    linkingTokenRepository.delete(token);
+                }
+            }
+        }
+
+        // ✅ Fallback to JWT cookie
+        if (userEmail == null) {
+            userEmail = extractEmailFromJwtCookie(request);
+            System.out.println("Extracted email from JWT: " + userEmail);
+        }
+
+        if (userEmail == null || userEmail.isEmpty()) {
+            System.out.println("No logged-in user found (JWT missing)");
+            response.sendRedirect(
+                    frontendUrl + "/login?error=" +
+                            URLEncoder.encode(
+                                    "Please log in before linking Twitter",
+                                    StandardCharsets.UTF_8
+                            )
+            );
+            return;
+        }
+
+        try {
+            OAuth2AuthorizedClient client =
+                    authorizedClientService.loadAuthorizedClient(
+                            oauthToken.getAuthorizedClientRegistrationId(),
+                            oauthToken.getName()
+                    );
+
+            twitterService.linkTwitterAccount(userEmail, client);
+            System.out.println("Successfully linked Twitter to user: " + userEmail);
+
+            Users user = userRepository.findByEmail(userEmail)
+                    .orElseThrow(() -> new IllegalStateException("User not found after Twitter link"));
+
+            String token = jwtService.generateToken(user);
+
+            // ✅ Set cookie with production settings and correct domain
+            // ✅ Remove Domain parameter
+            String cookieValue = String.format(
+                    "access_token=%s; Path=/; Max-Age=%d; HttpOnly; Secure; SameSite=None",
+                    token,
+                    7 * 24 * 60 * 60
+            );
+            response.addHeader("Set-Cookie", cookieValue);
+
+            System.out.println("Twitter linked successfully");
+            System.out.println("Redirecting to: " + frontendUrl + "/profile?twitter=success");
+
+            response.sendRedirect(frontendUrl + "/profile?twitter=success");
+
+        } catch (Exception e) {
+            System.err.println("Failed to link Twitter: " + e.getMessage());
+            e.printStackTrace();
+
+            String errorMessage =
+                    URLEncoder.encode(e.getMessage(), StandardCharsets.UTF_8);
+
+            response.sendRedirect(
+                    frontendUrl + "/profile?twitter=error&message=" + errorMessage
+            );
+        }
     }
-
     private String extractEmailFromLinkingToken(HttpServletRequest request) {
         // Get state parameter (contains our token)
         String state = request.getParameter("state");
