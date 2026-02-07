@@ -101,13 +101,12 @@ public class SecurityConfig {
                                 "/auth/google",
                                 "/auth/forgot-password",
                                 "/auth/reset-password",
-                                "/api/wallet/solana/health"
+                                "/api/solana/health"
                         ).permitAll()
-
                         // Protected endpoints - require JWT authentication
                         .requestMatchers(
                                 "/auth/me",
-                                "/api/wallet/**",
+                                "/api/solana/**",
                                 "/api/social/**"
                         ).authenticated()
 
@@ -151,7 +150,8 @@ public class SecurityConfig {
         config.setAllowedOrigins(List.of(
                 "http://localhost:3000",
                 "https://harvest3.com",
-                "https://www.harvest3.com"
+                "https://www.harvest3.com",
+                "https://api.harvest3.com"
         ));
         config.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"));
         config.setAllowedHeaders(List.of("*"));

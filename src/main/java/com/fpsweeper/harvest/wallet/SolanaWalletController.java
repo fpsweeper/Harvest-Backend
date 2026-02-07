@@ -18,7 +18,7 @@ import java.util.Map;
 import java.util.Optional;
 
 @RestController
-@RequestMapping("/api/wallet/solana")
+@RequestMapping("/api/solana")
 public class SolanaWalletController {
 
     @Autowired
