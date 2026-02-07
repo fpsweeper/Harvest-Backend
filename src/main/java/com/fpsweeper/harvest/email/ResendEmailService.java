@@ -20,7 +20,7 @@ public class ResendEmailService {
         Resend resend = new Resend(apiKey);
 
         CreateEmailOptions params = CreateEmailOptions.builder()
-                .from("Harvest3 <onboarding@resend.dev>")
+                .from("support@harvest3.com")
                 .to(toEmail)
                 .subject("Verify your Harvest3 account")
                 .html(buildVerificationHtml(code))
@@ -44,7 +44,7 @@ public class ResendEmailService {
         String resetUrl = "https://harvest3.com/reset-password?token=" + resetToken;
 
         CreateEmailOptions params = CreateEmailOptions.builder()
-                .from("Harvest3 <onboarding@resend.dev>")
+                .from("support@harvest3.com")
                 .to(toEmail)
                 .subject("Reset your Harvest3 password")
                 .html(buildPasswordResetHtml(resetUrl))
