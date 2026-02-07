@@ -47,7 +47,7 @@ public class SolanaWalletController {
         return ResponseEntity.ok("Wallet unlinked successfully");
     }
 
-    @GetMapping("/getWallet")
+    @PostMapping("/wallet")
     public ResponseEntity<?> getLinkedWallet(@AuthenticationPrincipal Object principal) {
         if (principal == null) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(null);

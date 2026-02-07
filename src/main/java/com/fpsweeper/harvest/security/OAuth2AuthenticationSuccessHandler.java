@@ -203,7 +203,7 @@ public class OAuth2AuthenticationSuccessHandler implements AuthenticationSuccess
             if (isProduction) {
                 // Production: Secure + SameSite=None for cross-origin
                 cookieValue = String.format(
-                        "access_token=%s; Path=/; Max-Age=%d; HttpOnly; Secure; SameSite=None",
+                        "access_token=%s; Path=/; Domain=.harvest3.com; Max-Age=%d; HttpOnly; Secure; SameSite=None",
                         token,
                         7 * 24 * 60 * 60
                 );
