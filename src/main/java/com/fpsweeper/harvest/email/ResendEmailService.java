@@ -37,17 +37,18 @@ public class ResendEmailService {
     }
 
     @Async
-    public void sendPasswordResetEmail(String toEmail, String resetToken) {
+    public void sendPasswordResetEmail(String toEmail, String code) {
         System.out.println("📧 Sending password reset email to: " + toEmail);
 
         Resend resend = new Resend(apiKey);
-        String resetUrl = "https://harvest3.com/reset-password?token=" + resetToken;
+
+        String htmlContent = buildResetEmail(toEmail, code);
 
         CreateEmailOptions params = CreateEmailOptions.builder()
                 .from("support@harvest3.com")
                 .to(toEmail)
                 .subject("Reset your Harvest3 password")
-                .html(buildPasswordResetHtml(resetUrl))
+                .html(htmlContent)
                 .build();
 
         try {
@@ -58,6 +59,58 @@ public class ResendEmailService {
             e.printStackTrace();
             throw new RuntimeException("Failed to send password reset email", e);
         }
+    }
+
+    private String buildResetEmail(String firstName, String code) {
+        return """
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <style>
+                    body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+                    .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+                    .header { background: linear-gradient(135deg, #667eea 0%%, #764ba2 100%%); 
+                             color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
+                    .content { background: #f9f9f9; padding: 30px; border-radius: 0 0 10px 10px; }
+                    .code-box { background: white; border: 2px dashed #667eea; padding: 20px; 
+                               text-align: center; margin: 20px 0; border-radius: 8px; }
+                    .code { font-size: 32px; font-weight: bold; letter-spacing: 8px; color: #667eea; }
+                    .footer { text-align: center; margin-top: 20px; color: #666; font-size: 12px; }
+                    .warning { background: #fff3cd; border-left: 4px solid #ffc107; padding: 12px; margin: 20px 0; }
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <div class="header">
+                        <h1>Password Reset Request</h1>
+                    </div>
+                    <div class="content">
+                        <p>Hi %s,</p>
+                        <p>We received a request to reset your Harvest 3 account password. Use the code below to reset your password:</p>
+                        
+                        <div class="code-box">
+                            <div class="code">%s</div>
+                        </div>
+                        
+                        <p style="text-align: center; color: #666;">This code will expire in 1 hour.</p>
+                        
+                        <div class="warning">
+                            <strong>⚠️ Security Notice:</strong> If you didn't request this password reset, please ignore this email. 
+                            Your password will remain unchanged.
+                        </div>
+                        
+                        <p>For security reasons, never share this code with anyone.</p>
+                        
+                        <p>Best regards,<br>The Harvest 3 Team</p>
+                    </div>
+                    <div class="footer">
+                        <p>This is an automated message, please do not reply to this email.</p>
+                        <p>&copy; 2026 Harvest 3. All rights reserved.</p>
+                    </div>
+                </div>
+            </body>
+            </html>
+            """.formatted(firstName, code);
     }
 
     private String buildVerificationHtml(String code) {
