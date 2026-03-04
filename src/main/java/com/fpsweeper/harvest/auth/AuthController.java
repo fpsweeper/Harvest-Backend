@@ -9,10 +9,9 @@ import com.fpsweeper.harvest.passwordreset.PasswordResetService;
 import com.fpsweeper.harvest.security.JwtService;
 import com.fpsweeper.harvest.user.UserRepository;
 import com.fpsweeper.harvest.user.Users;
-import com.fpsweeper.harvest.verification.EmailVerificationCodes;
 import com.fpsweeper.harvest.verification.EmailVerificationRepository;
 import com.fpsweeper.harvest.wallet.SolanaWalletRepository;
-import com.fpsweeper.harvest.wallet.SolanaWallets;
+import com.fpsweeper.harvest.wallet.UserWallet;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -24,11 +23,6 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.oauth2.core.user.OAuth2User;
 import org.springframework.web.bind.annotation.*;
-
-import java.time.Instant;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Optional;
 
 @RestController
 @RequestMapping("/auth")
@@ -96,10 +90,6 @@ public class AuthController {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(null);
         }
 
-        if (principal == null) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(null);
-        }
-
         Users user = null;
 
         // Handle JWT authentication
@@ -120,17 +110,22 @@ public class AuthController {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(null);
         }
 
-        SolanaWallets wallet = solanaWalletRepository.findByUserId(user.getId()).orElse(null);
+        // ✅ UPDATED: Get primary Solana wallet (backward compatible)
+        // For existing users, this returns their SOLANA wallet
+        // For multi-chain users, this returns their primary wallet
+        UserWallet wallet = solanaWalletRepository.findByUserId(user.getId()).orElse(null);
+
+        // Alternative: If you want to get SOLANA specifically:
+        // SolanaWallets wallet = solanaWalletRepository.findByUserIdAndChain(user.getId(), "SOLANA").orElse(null);
 
         return ResponseEntity.ok(new UserMeDto(
                 user.getId(),
                 user.getEmail(),
                 user.getRole(),
                 user.getAuthProvider(),
-                wallet
+                wallet  // SolanaWallets entity (which is the same as UserWallet)
         ));
     }
-
     @PostMapping("/login")
     public ResponseEntity<String> login(
             @RequestBody LoginRequest req,

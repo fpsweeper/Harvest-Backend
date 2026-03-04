@@ -101,14 +101,22 @@ public class SecurityConfig {
                                 "/auth/google",
                                 "/auth/forgot-password",
                                 "/auth/reset-password",
-                                "/api/solana/health"
+                                "/api/solana/health",
+                                "/api/chains/supported",
+                                "/api/chains/pricing"
                         ).permitAll()
                         // Protected endpoints - require JWT authentication
                         .requestMatchers(
                                 "/auth/me",
                                 "/api/solana/**",
-                                "/api/social/**"
-                        ).authenticated()
+                                "/api/social/**",
+                                "/api/points/**",
+                                "/api/deposits/**",
+                                "/api/chains/calculate",
+                                "/api/admin/**",
+                                "/api/wallet/**",
+                                "/api/pending-deposits/**"
+                                ).authenticated()
 
                         // Default deny
                         .anyRequest().authenticated()

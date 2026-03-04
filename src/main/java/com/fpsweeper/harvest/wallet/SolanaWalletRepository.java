@@ -3,15 +3,16 @@ package com.fpsweeper.harvest.wallet;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
 @Repository
-public interface SolanaWalletRepository extends JpaRepository<SolanaWallets, UUID> {
+public interface SolanaWalletRepository extends JpaRepository<UserWallet, UUID> {
 
-    Optional<SolanaWallets> findByUserId(UUID userId);
+    Optional<UserWallet> findByUserId(UUID userId);
 
-    Optional<SolanaWallets> findByWalletAddress(String walletAddress);
+    Optional<UserWallet> findByWalletAddress(String walletAddress);
 
     boolean existsByUserId(UUID userId);
 
@@ -19,6 +20,12 @@ public interface SolanaWalletRepository extends JpaRepository<SolanaWallets, UUI
 
     void deleteByUserId(UUID userId);
 
-    Optional<SolanaWallets> findByUserIdAndWalletAddress(UUID userId, String walletAddress);
+    Optional<UserWallet> findByUserIdAndWalletAddress(UUID userId, String walletAddress);
+
+    Optional<UserWallet> findByUserIdAndChain(UUID userId, String chain);
+    List<UserWallet> findAllByUserId(UUID userId);
+    Optional<UserWallet> findByWalletAddressAndChain(String walletAddress, String chain);
+    boolean existsByUserIdAndChain(UUID userId, String chain);
+
 
 }
