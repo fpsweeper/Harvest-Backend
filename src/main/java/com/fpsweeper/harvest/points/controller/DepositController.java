@@ -117,7 +117,7 @@ public class DepositController {
             instructions.put("securityAmount", pending.getSecurityAmount());  // ✅ From pending deposit
             instructions.put("exactAmount", pending.getExactAmount());  // ✅ From pending deposit
             instructions.put("amount", pending.getBaseAmount());  // Backward compatibility
-            instructions.put("token", "USDC");
+            instructions.put("token", "USDT");
             instructions.put("tokenAddress", pending.getTokenAddress());
             instructions.put("pointsToReceive", pending.getPointsToReceive());
 
@@ -133,7 +133,7 @@ public class DepositController {
 
             // ✅ Instructions with exact amount from pending deposit
             Map<String, String> steps = new HashMap<>();
-            steps.put("step1", "Send EXACTLY " + pending.getExactAmount() + " USDC to the address above");
+            steps.put("step1", "Send EXACTLY " + pending.getExactAmount() + " USDT to the address above");
             steps.put("step2", "IMPORTANT: You must send " + pending.getExactAmount() +
                     " (includes $" + pending.getSecurityAmount() + " security amount)");
             steps.put("step3", "Copy the transaction hash after sending");
