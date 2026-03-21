@@ -5,6 +5,7 @@ import com.fpsweeper.harvest.trading.dto.BotResponse;
 import com.fpsweeper.harvest.trading.dto.CreateBotRequest;
 import com.fpsweeper.harvest.trading.dto.IndicatorConditionRequest;
 import com.fpsweeper.harvest.trading.dto.UpdateBotRequest;
+import com.fpsweeper.harvest.trading.scheduler.BotExecutionScheduler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -30,11 +31,19 @@ public class BotService {
     @Autowired private BotPositionRepository positionRepository;
     @Autowired private TradeExecutionService tradeExecutionService;
 
+    private static final List<String> ALLOWED_TIMEFRAMES =
+            List.of("5m", "15m", "30m", "1h", "4h", "1d");
+
     // ─── Create ────────────────────────────────────────────────────────────────
 
     @Transactional
     public BotResponse createBot(CreateBotRequest request, UUID userId) {
         log.info("🤖 Creating new bot: {} for user: {}", request.getName(), userId);
+
+        // In createBot() and updateBot():
+        if (!ALLOWED_TIMEFRAMES.contains(request.getTimeframe())) {
+            throw new RuntimeException("Minimum timeframe is 5m");
+        }
 
         TradingBot bot = new TradingBot();
         bot.setUserId(userId);
@@ -81,6 +90,8 @@ public class BotService {
 
     // ─── Lifecycle ─────────────────────────────────────────────────────────────
 
+    @Autowired private BotExecutionScheduler botExecutionScheduler;
+
     @Transactional
     public BotResponse startBot(UUID botId, UUID userId) {
         TradingBot bot = botRepository.findByIdAndUserId(botId, userId)
@@ -95,6 +106,19 @@ public class BotService {
 
         TradingBot saved = botRepository.save(bot);
         log.info("▶️ Bot started: {} (ID: {})", saved.getName(), saved.getId());
+
+        // Trigger first execution immediately in a separate thread
+        // so the HTTP response returns instantly and doesn't block
+        new Thread(() -> {
+            try {
+                Thread.sleep(500); // small delay to let the transaction commit
+                botExecutionScheduler.executeSingleBot(saved.getId());
+                log.info("⚡ Immediate first execution triggered for bot: {}", saved.getName());
+            } catch (Exception e) {
+                log.error("❌ Immediate execution failed for bot {}: {}", saved.getName(), e.getMessage());
+            }
+        }).start();
+
         return convertToResponse(saved);
     }
 
@@ -168,6 +192,11 @@ public class BotService {
 
     @Transactional
     public BotResponse updateBot(UUID botId, UUID userId, UpdateBotRequest request) {
+
+        if (!ALLOWED_TIMEFRAMES.contains(request.getTimeframe())) {
+            throw new RuntimeException("Minimum timeframe is 5m");
+        }
+
         TradingBot bot = botRepository.findByIdAndUserId(botId, userId)
                 .orElseThrow(() -> new RuntimeException("Bot not found or access denied"));
 
