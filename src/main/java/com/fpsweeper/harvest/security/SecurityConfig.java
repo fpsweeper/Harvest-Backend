@@ -87,6 +87,8 @@ public class SecurityConfig {
                 // ===============================
                 // 4️⃣ Authorization rules
                 // ===============================
+                // In SecurityConfig.filterChain(), replace the authorizeHttpRequests block with this:
+
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
 
@@ -105,7 +107,14 @@ public class SecurityConfig {
                                 "/api/chains/supported",
                                 "/api/chains/pricing"
                         ).permitAll()
-                        // Protected endpoints - require JWT authentication
+                        .requestMatchers("/api/market-data/**").permitAll()
+                        .requestMatchers("/api/test/**").permitAll()
+
+                        // Protected bot endpoints (require JWT)
+                        .requestMatchers("/api/bots/**").authenticated()
+                        .requestMatchers("/api/bot-execution/**").authenticated()
+
+                        // Other protected endpoints
                         .requestMatchers(
                                 "/auth/me",
                                 "/api/solana/**",
@@ -116,9 +125,8 @@ public class SecurityConfig {
                                 "/api/admin/**",
                                 "/api/wallet/**",
                                 "/api/pending-deposits/**"
-                                ).authenticated()
+                        ).authenticated()
 
-                        // Default deny
                         .anyRequest().authenticated()
                 )
 
