@@ -5,7 +5,6 @@ import com.fpsweeper.harvest.trading.dto.BotResponse;
 import com.fpsweeper.harvest.trading.dto.CreateBotRequest;
 import com.fpsweeper.harvest.trading.dto.IndicatorConditionRequest;
 import com.fpsweeper.harvest.trading.dto.UpdateBotRequest;
-import com.fpsweeper.harvest.trading.scheduler.BotExecutionScheduler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -40,7 +39,6 @@ public class BotService {
     public BotResponse createBot(CreateBotRequest request, UUID userId) {
         log.info("🤖 Creating new bot: {} for user: {}", request.getName(), userId);
 
-        // In createBot() and updateBot():
         if (!ALLOWED_TIMEFRAMES.contains(request.getTimeframe())) {
             throw new RuntimeException("Minimum timeframe is 5m");
         }
@@ -90,8 +88,6 @@ public class BotService {
 
     // ─── Lifecycle ─────────────────────────────────────────────────────────────
 
-    @Autowired private BotExecutionScheduler botExecutionScheduler;
-
     @Transactional
     public BotResponse startBot(UUID botId, UUID userId) {
         TradingBot bot = botRepository.findByIdAndUserId(botId, userId)
@@ -102,22 +98,19 @@ public class BotService {
 
         bot.setStatus(BotStatus.SIMULATING);
         bot.setStartedAt(Instant.now());
+        // nextExecutionTime = now so scheduler picks it up on the very next cycle
         bot.setNextExecutionTime(Instant.now());
 
         TradingBot saved = botRepository.save(bot);
         log.info("▶️ Bot started: {} (ID: {})", saved.getName(), saved.getId());
 
-        // Trigger first execution immediately in a separate thread
-        // so the HTTP response returns instantly and doesn't block
-        new Thread(() -> {
-            try {
-                Thread.sleep(500); // small delay to let the transaction commit
-                botExecutionScheduler.executeSingleBot(saved.getId());
-                log.info("⚡ Immediate first execution triggered for bot: {}", saved.getName());
-            } catch (Exception e) {
-                log.error("❌ Immediate execution failed for bot {}: {}", saved.getName(), e.getMessage());
-            }
-        }).start();
+        // ✅ No immediate execution thread.
+        // The previous new Thread(() -> executeSingleBot()) caused a race condition
+        // on Render + Supabase: the background thread read a stale DB connection
+        // that still showed the bot as CREATED, causing silent failures and making
+        // the UI flip back to Ready status.
+        // The scheduler runs every 5 minutes and will execute this bot on its
+        // next cycle since nextExecutionTime is set to Instant.now().
 
         return convertToResponse(saved);
     }
@@ -146,7 +139,6 @@ public class BotService {
         if (!bot.canStop())
             throw new RuntimeException("Bot cannot be stopped in current status: " + bot.getStatus());
 
-        // Close all open positions at market price before stopping
         List<BotPosition> openPositions = positionRepository
                 .findByBotIdAndStatus(botId, PositionStatus.OPEN);
 
@@ -193,7 +185,7 @@ public class BotService {
     @Transactional
     public BotResponse updateBot(UUID botId, UUID userId, UpdateBotRequest request) {
 
-        if (!ALLOWED_TIMEFRAMES.contains(request.getTimeframe())) {
+        if (request.getTimeframe() != null && !ALLOWED_TIMEFRAMES.contains(request.getTimeframe())) {
             throw new RuntimeException("Minimum timeframe is 5m");
         }
 
@@ -253,27 +245,6 @@ public class BotService {
         log.debug("💾 Saved {} {} conditions", conditions.size(), type);
     }
 
-    /**
-     * Convert bot entity to response DTO.
-     *
-     * P&L FIX: Previous formula was currentBalance - initialBalance which
-     * was WRONG. When a bot buys $400 of BTC, currentBalance drops by $400
-     * but the position is worth $400 — so it showed -$400 P&L even though
-     * nothing was lost.
-     *
-     * Correct formula:
-     *   totalPnl = realizedPnl + unrealizedPnl
-     *
-     * realizedPnl   = SUM of profit_loss on all SELL trades (closed positions)
-     * unrealizedPnl = SUM of (currentPrice - entryPrice) * qty on OPEN positions
-     *                 updated each execution cycle by updateUnrealizedPnL()
-     *
-     * Examples:
-     *   Buy $400 BTC, price unchanged → 0 + 0 = $0 P&L ✅
-     *   BTC up 5%                     → 0 + $20 = +$20 ✅
-     *   Sell at +$20 profit            → +$20 + 0 = +$20 ✅
-     *   Sell at -$30 loss              → -$30 + 0 = -$30 ✅
-     */
     private BotResponse convertToResponse(TradingBot bot) {
         BotResponse response = new BotResponse();
         response.setId(bot.getId());
@@ -294,7 +265,6 @@ public class BotService {
         response.setNextExecutionTime(bot.getNextExecutionTime());
         response.setConfiguration(bot.getConfiguration());
 
-        // ── Correct P&L: realized + unrealized ─────────────────────────────
         BigDecimal realizedPnl   = positionRepository.getTotalRealizedPnl(bot.getId());
         BigDecimal unrealizedPnl = positionRepository.getTotalUnrealizedPnl(bot.getId());
         BigDecimal totalPnl      = realizedPnl.add(unrealizedPnl);
@@ -307,7 +277,6 @@ public class BotService {
                     .multiply(BigDecimal.valueOf(100));
             response.setTotalPnlPercentage(pnlPercent);
         }
-        // ───────────────────────────────────────────────────────────────────
 
         response.setTotalTrades((int) tradeRepository.countByBotId(bot.getId()));
         response.setOpenPositions((int) positionRepository.countByBotIdAndStatus(
