@@ -1,184 +1,287 @@
-package com.fpsweeper.harvest.trading.controller;
+package com.fpsweeper.harvest.trading.service;
 
+import com.fpsweeper.harvest.trading.*;
 import com.fpsweeper.harvest.trading.dto.BotResponse;
 import com.fpsweeper.harvest.trading.dto.CreateBotRequest;
+import com.fpsweeper.harvest.trading.dto.IndicatorConditionRequest;
 import com.fpsweeper.harvest.trading.dto.UpdateBotRequest;
-import com.fpsweeper.harvest.trading.service.BotService;
-import com.fpsweeper.harvest.user.Users;
-import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
-import org.springframework.security.core.annotation.AuthenticationPrincipal;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
-@RestController
-@RequestMapping("/api/bots")
-@CrossOrigin(origins = "*")
-public class BotController {
+@Service
+public class BotService {
 
-    private static final Logger log = LoggerFactory.getLogger(BotController.class);
+    private static final Logger log = LoggerFactory.getLogger(BotService.class);
 
-    @Autowired
-    private BotService botService;
+    @Autowired private TradingBotRepository botRepository;
+    @Autowired private BotIndicatorConditionRepository conditionRepository;
+    @Autowired private BotTradeRepository tradeRepository;
+    @Autowired private BotPositionRepository positionRepository;
+    @Autowired private TradeExecutionService tradeExecutionService;
 
-    @PostMapping
-    public ResponseEntity<?> createBot(
-            @AuthenticationPrincipal Users user,
-            @Valid @RequestBody CreateBotRequest request
-    ) {
-        if (user == null) return unauthorized();
+    private static final List<String> ALLOWED_TIMEFRAMES =
+            List.of("5m", "15m", "30m", "1h", "4h", "1d");
 
-        try {
-            log.info("📥 Creating bot: {} for user: {}", request.getName(), user.getId());
-            BotResponse bot = botService.createBot(request, user.getId());
-            return ResponseEntity.status(HttpStatus.CREATED).body(success("Bot created successfully", "bot", bot));
-        } catch (Exception e) {
-            log.error("❌ Error creating bot: {}", e.getMessage(), e);
-            return ResponseEntity.badRequest().body(error(e.getMessage()));
+    // ─── Create ────────────────────────────────────────────────────────────────
+
+    @Transactional
+    public BotResponse createBot(CreateBotRequest request, UUID userId) {
+        log.info("🤖 Creating new bot: {} for user: {}", request.getName(), userId);
+
+        if (!ALLOWED_TIMEFRAMES.contains(request.getTimeframe())) {
+            throw new RuntimeException("Minimum timeframe is 5m");
         }
+
+        TradingBot bot = new TradingBot();
+        bot.setUserId(userId);
+        bot.setName(request.getName());
+        bot.setDescription(request.getDescription());
+        bot.setStrategyType(request.getStrategyType());
+        bot.setTradingPair(request.getTradingPair());
+        bot.setTimeframe(request.getTimeframe());
+        bot.setStatus(BotStatus.CREATED);
+        bot.setInitialBalance(request.getInitialBalance());
+        bot.setCurrentBalance(request.getInitialBalance());
+        bot.setStopLossPercentage(request.getStopLossPercentage());
+        bot.setTakeProfitPercentage(request.getTakeProfitPercentage());
+        bot.setMaxPositionSizePercentage(request.getMaxPositionSizePercentage());
+        bot.setPointsPerDay(StrategyPointsCost.forStrategy(request.getStrategyType()));
+        bot.setConfiguration(request.getConfiguration() != null ? request.getConfiguration() : new HashMap<>());
+        bot.setExecutionCount(0);
+
+        TradingBot savedBot = botRepository.save(bot);
+
+        if (request.getEntryConditions() != null && !request.getEntryConditions().isEmpty())
+            saveConditions(savedBot.getId(), request.getEntryConditions(), ConditionType.ENTRY);
+        if (request.getExitConditions() != null && !request.getExitConditions().isEmpty())
+            saveConditions(savedBot.getId(), request.getExitConditions(), ConditionType.EXIT);
+
+        log.info("✅ Bot created: {} (ID: {})", savedBot.getName(), savedBot.getId());
+        return convertToResponse(savedBot);
     }
 
-    @GetMapping
-    public ResponseEntity<?> getUserBots(@AuthenticationPrincipal Users user) {
-        if (user == null) return unauthorized();
+    // ─── Read ──────────────────────────────────────────────────────────────────
 
-        try {
-            List<BotResponse> bots = botService.getUserBots(user.getId());
-            Map<String, Object> response = new HashMap<>();
-            response.put("success", true);
-            response.put("count", bots.size());
-            response.put("bots", bots);
-            return ResponseEntity.ok(response);
-        } catch (Exception e) {
-            log.error("❌ Error fetching bots: {}", e.getMessage(), e);
-            return ResponseEntity.badRequest().body(error(e.getMessage()));
+    public List<BotResponse> getUserBots(UUID userId) {
+        return botRepository.findByUserIdOrderByCreatedAtDesc(userId)
+                .stream()
+                .map(this::convertToResponse)
+                .collect(Collectors.toList());
+    }
+
+    public BotResponse getBotById(UUID botId, UUID userId) {
+        TradingBot bot = botRepository.findByIdAndUserId(botId, userId)
+                .orElseThrow(() -> new RuntimeException("Bot not found or access denied"));
+        return convertToResponse(bot);
+    }
+
+    // ─── Lifecycle ─────────────────────────────────────────────────────────────
+
+    @Transactional
+    public BotResponse startBot(UUID botId, UUID userId) {
+        TradingBot bot = botRepository.findByIdAndUserId(botId, userId)
+                .orElseThrow(() -> new RuntimeException("Bot not found or access denied"));
+
+        if (!bot.canStart())
+            throw new RuntimeException("Bot cannot be started in current status: " + bot.getStatus());
+
+        bot.setStatus(BotStatus.SIMULATING);
+        bot.setStartedAt(Instant.now());
+        // nextExecutionTime = now so scheduler picks it up on the very next cycle
+        bot.setNextExecutionTime(Instant.now());
+
+        TradingBot saved = botRepository.save(bot);
+        log.info("▶️ Bot started: {} (ID: {})", saved.getName(), saved.getId());
+
+        // ✅ No immediate execution thread.
+        // The previous new Thread(() -> executeSingleBot()) caused a race condition
+        // on Render + Supabase: the background thread read a stale DB connection
+        // that still showed the bot as CREATED, causing silent failures and making
+        // the UI flip back to Ready status.
+        // The scheduler runs every 5 minutes and will execute this bot on its
+        // next cycle since nextExecutionTime is set to Instant.now().
+
+        return convertToResponse(saved);
+    }
+
+    @Transactional
+    public BotResponse pauseBot(UUID botId, UUID userId) {
+        TradingBot bot = botRepository.findByIdAndUserId(botId, userId)
+                .orElseThrow(() -> new RuntimeException("Bot not found or access denied"));
+
+        if (!bot.canPause())
+            throw new RuntimeException("Bot cannot be paused in current status: " + bot.getStatus());
+
+        bot.setStatus(BotStatus.PAUSED);
+        bot.setPausedAt(Instant.now());
+
+        TradingBot saved = botRepository.save(bot);
+        log.info("⏸️ Bot paused: {} (ID: {})", saved.getName(), saved.getId());
+        return convertToResponse(saved);
+    }
+
+    @Transactional
+    public BotResponse stopBot(UUID botId, UUID userId) {
+        TradingBot bot = botRepository.findByIdAndUserId(botId, userId)
+                .orElseThrow(() -> new RuntimeException("Bot not found or access denied"));
+
+        if (!bot.canStop())
+            throw new RuntimeException("Bot cannot be stopped in current status: " + bot.getStatus());
+
+        List<BotPosition> openPositions = positionRepository
+                .findByBotIdAndStatus(botId, PositionStatus.OPEN);
+
+        if (!openPositions.isEmpty()) {
+            log.info("🔒 Closing {} open position(s) for bot: {}", openPositions.size(), bot.getName());
+            for (BotPosition position : openPositions) {
+                try {
+                    tradeExecutionService.executeSell(
+                            bot,
+                            position.getSymbol(),
+                            position.getQuantity(),
+                            "Position closed — bot stopped"
+                    );
+                } catch (Exception e) {
+                    log.error("❌ Failed to close position {}: {}", position.getId(), e.getMessage());
+                }
+            }
         }
+
+        bot.setStatus(BotStatus.STOPPED);
+        bot.setStoppedAt(Instant.now());
+
+        TradingBot saved = botRepository.save(bot);
+        log.info("⏹️ Bot stopped: {} (ID: {})", saved.getName(), saved.getId());
+        return convertToResponse(saved);
     }
 
-    @GetMapping("/{id}")
-    public ResponseEntity<?> getBotById(
-            @AuthenticationPrincipal Users user,
-            @PathVariable UUID id
-    ) {
-        if (user == null) return unauthorized();
+    @Transactional
+    public void deleteBot(UUID botId, UUID userId) {
+        TradingBot bot = botRepository.findByIdAndUserId(botId, userId)
+                .orElseThrow(() -> new RuntimeException("Bot not found or access denied"));
 
-        try {
-            BotResponse bot = botService.getBotById(id, user.getId());
-            return ResponseEntity.ok(success(null, "bot", bot));
-        } catch (Exception e) {
-            log.error("❌ Error fetching bot {}: {}", id, e.getMessage());
-            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error(e.getMessage()));
+        if (!bot.canDelete())
+            throw new RuntimeException("Bot cannot be deleted in current status: " + bot.getStatus());
+
+        bot.setStatus(BotStatus.DELETED);
+        bot.setDeletedAt(Instant.now());
+        botRepository.save(bot);
+        log.info("🗑️ Bot deleted: {} (ID: {})", bot.getName(), bot.getId());
+    }
+
+    // ─── Update ────────────────────────────────────────────────────────────────
+
+    @Transactional
+    public BotResponse updateBot(UUID botId, UUID userId, UpdateBotRequest request) {
+
+        if (request.getTimeframe() != null && !ALLOWED_TIMEFRAMES.contains(request.getTimeframe())) {
+            throw new RuntimeException("Minimum timeframe is 5m");
         }
-    }
 
-    @PutMapping("/{id}/start")
-    public ResponseEntity<?> startBot(
-            @AuthenticationPrincipal Users user,
-            @PathVariable UUID id
-    ) {
-        if (user == null) return unauthorized();
+        TradingBot bot = botRepository.findByIdAndUserId(botId, userId)
+                .orElseThrow(() -> new RuntimeException("Bot not found or access denied"));
 
-        try {
-            log.info("▶️ Starting bot: {} for user: {}", id, user.getId());
-            BotResponse bot = botService.startBot(id, user.getId());
-            return ResponseEntity.ok(success("Bot started successfully", "bot", bot));
-        } catch (Exception e) {
-            log.error("❌ Error starting bot {}: {}", id, e.getMessage());
-            return ResponseEntity.badRequest().body(error(e.getMessage()));
+        if (bot.getStatus() == BotStatus.SIMULATING)
+            throw new RuntimeException("Pause the bot before editing its configuration");
+
+        long openCount = positionRepository.countByBotIdAndStatus(botId, PositionStatus.OPEN);
+        if (openCount > 0)
+            throw new RuntimeException(
+                    "Cannot edit bot while it has " + openCount +
+                            " open position(s). Stop the bot first to close them.");
+
+        if (request.getName() != null)                      bot.setName(request.getName());
+        if (request.getDescription() != null)               bot.setDescription(request.getDescription());
+        if (request.getTradingPair() != null)               bot.setTradingPair(request.getTradingPair());
+        if (request.getTimeframe() != null)                 bot.setTimeframe(request.getTimeframe());
+        if (request.getStopLossPercentage() != null)        bot.setStopLossPercentage(request.getStopLossPercentage());
+        if (request.getTakeProfitPercentage() != null)      bot.setTakeProfitPercentage(request.getTakeProfitPercentage());
+        if (request.getMaxPositionSizePercentage() != null) bot.setMaxPositionSizePercentage(request.getMaxPositionSizePercentage());
+        if (request.getConfiguration() != null)             bot.setConfiguration(request.getConfiguration());
+
+        bot.setNextExecutionTime(null);
+
+        TradingBot saved = botRepository.save(bot);
+
+        if (request.getEntryConditions() != null || request.getExitConditions() != null) {
+            conditionRepository.deleteByBotId(botId);
+            if (request.getEntryConditions() != null)
+                saveConditions(botId, request.getEntryConditions(), ConditionType.ENTRY);
+            if (request.getExitConditions() != null)
+                saveConditions(botId, request.getExitConditions(), ConditionType.EXIT);
         }
+
+        log.info("✏️ Bot updated: {} (ID: {})", saved.getName(), saved.getId());
+        return convertToResponse(saved);
     }
 
-    @PutMapping("/{id}/pause")
-    public ResponseEntity<?> pauseBot(
-            @AuthenticationPrincipal Users user,
-            @PathVariable UUID id
-    ) {
-        if (user == null) return unauthorized();
+    // ─── Helpers ───────────────────────────────────────────────────────────────
 
-        try {
-            log.info("⏸️ Pausing bot: {} for user: {}", id, user.getId());
-            BotResponse bot = botService.pauseBot(id, user.getId());
-            return ResponseEntity.ok(success("Bot paused successfully", "bot", bot));
-        } catch (Exception e) {
-            log.error("❌ Error pausing bot {}: {}", id, e.getMessage());
-            return ResponseEntity.badRequest().body(error(e.getMessage()));
+    private void saveConditions(UUID botId, List<IndicatorConditionRequest> conditions, ConditionType type) {
+        int order = 0;
+        for (IndicatorConditionRequest req : conditions) {
+            BotIndicatorCondition cond = new BotIndicatorCondition();
+            cond.setBotId(botId);
+            cond.setConditionType(type);
+            cond.setIndicatorName(req.getIndicatorName());
+            cond.setIndicatorPeriod(req.getIndicatorPeriod());
+            cond.setOperator(req.getOperator());
+            cond.setComparisonValue(req.getComparisonValue());
+            cond.setLogicalOperator(req.getLogicalOperator());
+            cond.setConditionOrder(order++);
+            conditionRepository.save(cond);
         }
+        log.debug("💾 Saved {} {} conditions", conditions.size(), type);
     }
 
-    @PutMapping("/{id}/stop")
-    public ResponseEntity<?> stopBot(
-            @AuthenticationPrincipal Users user,
-            @PathVariable UUID id
-    ) {
-        if (user == null) return unauthorized();
+    private BotResponse convertToResponse(TradingBot bot) {
+        BotResponse response = new BotResponse();
+        response.setId(bot.getId());
+        response.setName(bot.getName());
+        response.setDescription(bot.getDescription());
+        response.setStrategyType(bot.getStrategyType());
+        response.setTradingPair(bot.getTradingPair());
+        response.setTimeframe(bot.getTimeframe());
+        response.setStatus(bot.getStatus());
+        response.setInitialBalance(bot.getInitialBalance());
+        response.setCurrentBalance(bot.getCurrentBalance());
+        response.setStopLossPercentage(bot.getStopLossPercentage());
+        response.setTakeProfitPercentage(bot.getTakeProfitPercentage());
+        response.setMaxPositionSizePercentage(bot.getMaxPositionSizePercentage());
+        response.setCreatedAt(bot.getCreatedAt());
+        response.setStartedAt(bot.getStartedAt());
+        response.setLastExecutionTime(bot.getLastExecutionTime());
+        response.setNextExecutionTime(bot.getNextExecutionTime());
+        response.setConfiguration(bot.getConfiguration());
 
-        try {
-            log.info("⏹️ Stopping bot: {} for user: {}", id, user.getId());
-            BotResponse bot = botService.stopBot(id, user.getId());
-            return ResponseEntity.ok(success("Bot stopped successfully", "bot", bot));
-        } catch (Exception e) {
-            log.error("❌ Error stopping bot {}: {}", id, e.getMessage());
-            return ResponseEntity.badRequest().body(error(e.getMessage()));
+        BigDecimal realizedPnl   = positionRepository.getTotalRealizedPnl(bot.getId());
+        BigDecimal unrealizedPnl = positionRepository.getTotalUnrealizedPnl(bot.getId());
+        BigDecimal totalPnl      = realizedPnl.add(unrealizedPnl);
+
+        response.setTotalPnl(totalPnl);
+
+        if (bot.getInitialBalance().compareTo(BigDecimal.ZERO) > 0) {
+            BigDecimal pnlPercent = totalPnl
+                    .divide(bot.getInitialBalance(), 4, RoundingMode.HALF_UP)
+                    .multiply(BigDecimal.valueOf(100));
+            response.setTotalPnlPercentage(pnlPercent);
         }
-    }
 
-    @DeleteMapping("/{id}")
-    public ResponseEntity<?> deleteBot(
-            @AuthenticationPrincipal Users user,
-            @PathVariable UUID id
-    ) {
-        if (user == null) return unauthorized();
+        response.setTotalTrades((int) tradeRepository.countByBotId(bot.getId()));
+        response.setOpenPositions((int) positionRepository.countByBotIdAndStatus(
+                bot.getId(), PositionStatus.OPEN));
 
-        try {
-            log.info("🗑️ Deleting bot: {} for user: {}", id, user.getId());
-            botService.deleteBot(id, user.getId());
-            return ResponseEntity.ok(success("Bot deleted successfully", null, null));
-        } catch (Exception e) {
-            log.error("❌ Error deleting bot {}: {}", id, e.getMessage());
-            return ResponseEntity.badRequest().body(error(e.getMessage()));
-        }
-    }
-
-    @PutMapping("/{id}")
-    public ResponseEntity<?> updateBot(
-            @AuthenticationPrincipal Users user,
-            @PathVariable UUID id,
-            @RequestBody UpdateBotRequest request
-    ) {
-        if (user == null) return unauthorized();
-        try {
-            BotResponse bot = botService.updateBot(id, user.getId(), request);
-            return ResponseEntity.ok(success("Bot updated successfully", "bot", bot));
-        } catch (Exception e) {
-            log.error("❌ Error updating bot {}: {}", id, e.getMessage());
-            return ResponseEntity.badRequest().body(error(e.getMessage()));
-        }
-    }
-
-    // ── Helpers ──────────────────────────────────────────────────────────────
-
-    private ResponseEntity<?> unauthorized() {
-        return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
-                .body(Map.of("success", false, "error", "Unauthorized"));
-    }
-
-    private Map<String, Object> success(String message, String key, Object value) {
-        Map<String, Object> map = new HashMap<>();
-        map.put("success", true);
-        if (message != null) map.put("message", message);
-        if (key != null && value != null) map.put(key, value);
-        return map;
-    }
-
-    private Map<String, Object> error(String message) {
-        return Map.of("success", false, "error", message);
+        return response;
     }
 }
