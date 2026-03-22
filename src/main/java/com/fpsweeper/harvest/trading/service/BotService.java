@@ -30,6 +30,8 @@ public class BotService {
     @Autowired private BotPositionRepository positionRepository;
     @Autowired private TradeExecutionService tradeExecutionService;
 
+    @Autowired private org.springframework.context.ApplicationEventPublisher eventPublisher;
+
     private static final List<String> ALLOWED_TIMEFRAMES =
             List.of("5m", "15m", "30m", "1h", "4h", "1d");
 
@@ -111,6 +113,9 @@ public class BotService {
         // the UI flip back to Ready status.
         // The scheduler runs every 5 minutes and will execute this bot on its
         // next cycle since nextExecutionTime is set to Instant.now().
+
+        // ✅ Publish event — listener fires AFTER this transaction commits
+        eventPublisher.publishEvent(new BotStartedEvent(saved.getId()));
 
         return convertToResponse(saved);
     }
