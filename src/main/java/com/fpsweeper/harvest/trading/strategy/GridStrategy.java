@@ -21,9 +21,10 @@ public class GridStrategy implements TradingStrategy {
 
     private static final Logger log = LoggerFactory.getLogger(GridStrategy.class);
 
-    private static final int        DEFAULT_GRID_LEVELS  = 5;
-    private static final BigDecimal DEFAULT_GRID_SPACING = new BigDecimal("2.0");
-    private static final BigDecimal PROFIT_PER_GRID      = new BigDecimal("2.5");
+    private static final int        DEFAULT_GRID_LEVELS     = 5;
+    private static final BigDecimal DEFAULT_GRID_SPACING    = new BigDecimal("2.0");
+    // Fallback only — used when user has not configured a take profit percentage
+    private static final BigDecimal DEFAULT_PROFIT_PER_GRID = new BigDecimal("2.5");
 
     @Autowired private IndicatorService indicatorService;
     @Autowired private ConditionEvaluator conditionEvaluator;
@@ -48,6 +49,14 @@ public class GridStrategy implements TradingStrategy {
             int        gridLevels  = getConfigValue(config, "grid_levels",          DEFAULT_GRID_LEVELS);
             BigDecimal gridSpacing = getConfigValue(config, "grid_spacing_percent",  DEFAULT_GRID_SPACING);
 
+            // ✅ Respect user-configured TP — fall back to 2.5% default if not set
+            BigDecimal profitPerGrid = bot.getTakeProfitPercentage() != null
+                    ? bot.getTakeProfitPercentage()
+                    : DEFAULT_PROFIT_PER_GRID;
+
+            log.info("⚙️ Grid thresholds — TP: {}% SL: {}% levels: {} spacing: {}%",
+                    profitPerGrid, bot.getStopLossPercentage(), gridLevels, gridSpacing);
+
             // ── Sell profitable positions ──────────────────────────────────────
             List<BotPosition> openPositions = positionRepository
                     .findByBotIdAndStatus(bot.getId(), PositionStatus.OPEN);
@@ -57,14 +66,14 @@ public class GridStrategy implements TradingStrategy {
                         .divide(position.getEntryPrice(), 4, RoundingMode.HALF_UP)
                         .multiply(BigDecimal.valueOf(100));
 
-                if (profitPct.compareTo(PROFIT_PER_GRID) >= 0) {
-                    log.info("✅ Grid sell triggered! Profit: {}%", profitPct);
+                if (profitPct.compareTo(profitPerGrid) >= 0) {
+                    log.info("✅ Grid take profit triggered! Profit: {}% (target: {}%)", profitPct, profitPerGrid);
                     return TradeSignal.sell(bot.getTradingPair(), position.getQuantity(),
-                            String.format("Grid profit: %.2f%%", profitPct), indicators);
+                            String.format("Take profit: %.2f%%", profitPct), indicators);
                 }
             }
 
-            // ── Entry conditions ──────────────────────────────────────────────
+            // ── Entry conditions ───────────────────────────────────────────────
             List<BotIndicatorCondition> entryConds = conditionRepository
                     .findByBotIdAndConditionTypeOrderByConditionOrder(bot.getId(), ConditionType.ENTRY);
 
@@ -90,7 +99,7 @@ public class GridStrategy implements TradingStrategy {
                 }
             }
 
-            // ── Stop loss ─────────────────────────────────────────────────────
+            // ── Stop loss ──────────────────────────────────────────────────────
             TradeSignal sl = checkStopLoss(bot, openPositions, currentPrice, indicators);
             if (sl.shouldTrade()) return sl;
 
@@ -110,11 +119,6 @@ public class GridStrategy implements TradingStrategy {
         }).collect(Collectors.toList());
     }
 
-    /**
-     * Split balance equally across grid levels.
-     * Applies same normalization fix — if balance-per-level is mistakenly tiny
-     * the diagnostic log will show it immediately.
-     */
     private BigDecimal calculateGridSize(TradingBot bot, BigDecimal price, int levels) {
         BigDecimal balance  = bot.getCurrentBalance();
         BigDecimal perLevel = balance.divide(BigDecimal.valueOf(levels), 8, RoundingMode.HALF_UP);

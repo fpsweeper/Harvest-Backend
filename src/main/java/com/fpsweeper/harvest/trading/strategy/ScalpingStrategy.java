@@ -18,9 +18,9 @@ public class ScalpingStrategy implements TradingStrategy {
 
     private static final Logger log = LoggerFactory.getLogger(ScalpingStrategy.class);
 
+    // Fallback defaults — only used if the bot has no SL/TP configured
     private static final BigDecimal DEFAULT_QUICK_PROFIT = new BigDecimal("0.8");
     private static final BigDecimal DEFAULT_TIGHT_STOP   = new BigDecimal("0.5");
-    // Default: use 80% of balance per scalp trade
     private static final BigDecimal DEFAULT_POSITION_PCT = new BigDecimal("80");
 
     @Autowired private IndicatorService indicatorService;
@@ -45,8 +45,18 @@ public class ScalpingStrategy implements TradingStrategy {
             log.info("💹 price: ${} RSI: {} MACD-H: {}", currentPrice, rsi, macdHistogram);
 
             Map<String, Object> config = bot.getConfiguration();
-            BigDecimal quickProfit     = getConfigValue(config, "quick_profit_target", DEFAULT_QUICK_PROFIT);
-            BigDecimal tightStop       = getConfigValue(config, "tight_stop_loss", DEFAULT_TIGHT_STOP);
+
+            // ✅ Respect user-configured TP/SL from the bot settings.
+            // Falls back to config map values, then hardcoded defaults.
+            BigDecimal quickProfit = bot.getTakeProfitPercentage() != null
+                    ? bot.getTakeProfitPercentage()
+                    : getConfigValue(config, "quick_profit_target", DEFAULT_QUICK_PROFIT);
+
+            BigDecimal tightStop = bot.getStopLossPercentage() != null
+                    ? bot.getStopLossPercentage()
+                    : getConfigValue(config, "tight_stop_loss", DEFAULT_TIGHT_STOP);
+
+            log.info("⚙️ Scalping thresholds — TP: {}% SL: {}%", quickProfit, tightStop);
 
             // ── Exit open positions first ──────────────────────────────────────
             List<BotPosition> openPositions = positionRepository
@@ -59,15 +69,15 @@ public class ScalpingStrategy implements TradingStrategy {
                             .multiply(BigDecimal.valueOf(100));
 
                     if (pnlPct.compareTo(quickProfit) >= 0) {
-                        log.info("💰 Quick profit hit! Profit: {}%", pnlPct);
+                        log.info("💰 Quick profit hit! Profit: {}% (target: {}%)", pnlPct, quickProfit);
                         return TradeSignal.sell(bot.getTradingPair(), position.getQuantity(),
-                                String.format("Quick profit: %.2f%%", pnlPct), indicators);
+                                String.format("Take profit: %.2f%%", pnlPct), indicators);
                     }
 
                     if (pnlPct.compareTo(tightStop.negate()) <= 0) {
-                        log.warn("🛑 Tight stop hit! Loss: {}%", pnlPct);
+                        log.warn("🛑 Stop loss hit! Loss: {}% (limit: {}%)", pnlPct, tightStop);
                         return TradeSignal.sell(bot.getTradingPair(), position.getQuantity(),
-                                String.format("Tight stop: %.2f%%", pnlPct), indicators);
+                                String.format("Stop loss: %.2f%%", pnlPct), indicators);
                     }
 
                     List<BotIndicatorCondition> exitConds = conditionRepository
@@ -78,7 +88,8 @@ public class ScalpingStrategy implements TradingStrategy {
                                 "Scalping exit conditions met", indicators);
                     }
                 }
-                return TradeSignal.hold("Waiting for profit target or stop loss");
+                return TradeSignal.hold(String.format(
+                        "Waiting for TP (%.2f%%) or SL (%.2f%%)", quickProfit, tightStop));
             }
 
             // ── Entry ──────────────────────────────────────────────────────────
@@ -112,17 +123,13 @@ public class ScalpingStrategy implements TradingStrategy {
         boolean rsiOk  = rsi.compareTo(BigDecimal.valueOf(30)) >= 0
                 && rsi.compareTo(BigDecimal.valueOf(45)) <= 0;
         boolean macdOk = macdHistogram.compareTo(BigDecimal.ZERO) > 0;
-        BigDecimal ma20   = indicators.getOrDefault("MA_20", BigDecimal.ZERO);
-        BigDecimal price  = indicators.get("CLOSE_PRICE");
-        boolean priceOk   = ma20.compareTo(BigDecimal.ZERO) > 0
+        BigDecimal ma20  = indicators.getOrDefault("MA_20", BigDecimal.ZERO);
+        BigDecimal price = indicators.get("CLOSE_PRICE");
+        boolean priceOk  = ma20.compareTo(BigDecimal.ZERO) > 0
                 && price.compareTo(ma20.multiply(new BigDecimal("1.01"))) <= 0;
         return rsiOk && macdOk && priceOk;
     }
 
-    /**
-     * Use bot's maxPositionSizePercentage if set, otherwise default to 80%.
-     * Applies same normalization fix as DCAStrategy.
-     */
     private BigDecimal calculatePositionSize(TradingBot bot, BigDecimal currentPrice) {
         BigDecimal balance = bot.getCurrentBalance();
         BigDecimal rawPct  = bot.getMaxPositionSizePercentage() != null
