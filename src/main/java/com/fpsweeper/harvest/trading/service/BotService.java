@@ -1,5 +1,6 @@
 package com.fpsweeper.harvest.trading.service;
 
+import com.fpsweeper.harvest.notification.NotificationService;
 import com.fpsweeper.harvest.trading.*;
 import com.fpsweeper.harvest.trading.dto.BotResponse;
 import com.fpsweeper.harvest.trading.dto.CreateBotRequest;
@@ -31,6 +32,8 @@ public class BotService {
     @Autowired private TradeExecutionService tradeExecutionService;
 
     @Autowired private org.springframework.context.ApplicationEventPublisher eventPublisher;
+
+    @Autowired private NotificationService notificationService;
 
     private static final List<String> ALLOWED_TIMEFRAMES =
             List.of("5m", "15m", "30m", "1h", "4h", "1d");
@@ -106,6 +109,8 @@ public class BotService {
         TradingBot saved = botRepository.save(bot);
         log.info("▶️ Bot started: {} (ID: {})", saved.getName(), saved.getId());
 
+        notificationService.notifyBotStarted(saved.getUserId(), saved.getName(), saved.getTradingPair(), saved.getTimeframe());
+
         // ✅ No immediate execution thread.
         // The previous new Thread(() -> executeSingleBot()) caused a race condition
         // on Render + Supabase: the background thread read a stale DB connection
@@ -133,6 +138,8 @@ public class BotService {
 
         TradingBot saved = botRepository.save(bot);
         log.info("⏸️ Bot paused: {} (ID: {})", saved.getName(), saved.getId());
+
+        notificationService.notifyBotPaused(saved.getUserId(), saved.getName());
         return convertToResponse(saved);
     }
 
@@ -168,6 +175,9 @@ public class BotService {
 
         TradingBot saved = botRepository.save(bot);
         log.info("⏹️ Bot stopped: {} (ID: {})", saved.getName(), saved.getId());
+
+        notificationService.notifyBotStopped(saved.getUserId(), saved.getName());
+
         return convertToResponse(saved);
     }
 

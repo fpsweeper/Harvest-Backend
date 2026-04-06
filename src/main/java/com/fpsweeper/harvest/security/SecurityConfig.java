@@ -55,9 +55,6 @@ public class SecurityConfig {
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
 
         http
-                // ===============================
-                // 1️⃣ Stateless error handling
-                // ===============================
                 .exceptionHandling(ex -> ex
                         .defaultAuthenticationEntryPointFor(
                                 (request, response, authException) -> {
@@ -70,29 +67,16 @@ public class SecurityConfig {
                                                 || request.getRequestURI().startsWith("/auth/")
                         )
                 )
-
-                // ===============================
-                // 2️⃣ CORS + CSRF
-                // ===============================
                 .cors(Customizer.withDefaults())
                 .csrf(csrf -> csrf.disable())
-
-                // ===============================
-                // 3️⃣ Stateless session policy
-                // ===============================
                 .sessionManagement(session ->
                         session.sessionCreationPolicy(SessionCreationPolicy.STATELESS)
                 )
 
-                // ===============================
-                // 4️⃣ Authorization rules
-                // ===============================
-                // In SecurityConfig.filterChain(), replace the authorizeHttpRequests block with this:
-
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
 
-                        // Public endpoints
+                        // ── Public endpoints ───────────────────────────────────────────
                         .requestMatchers(
                                 "/oauth2/**",
                                 "/login/oauth2/**",
@@ -110,11 +94,14 @@ public class SecurityConfig {
                         .requestMatchers("/api/market-data/**").permitAll()
                         .requestMatchers("/api/test/**").permitAll()
 
-                        // Protected bot endpoints (require JWT)
+                        // ✅ Public — landing page fetches packages without auth
+                        .requestMatchers(HttpMethod.GET, "/api/points/packages").permitAll()
+
+                        // ── Protected bot endpoints ────────────────────────────────────
                         .requestMatchers("/api/bots/**").authenticated()
                         .requestMatchers("/api/bot-execution/**").authenticated()
 
-                        // Other protected endpoints
+                        // ── Other protected endpoints ──────────────────────────────────
                         .requestMatchers(
                                 "/auth/me",
                                 "/api/solana/**",
@@ -130,17 +117,11 @@ public class SecurityConfig {
                         .anyRequest().authenticated()
                 )
 
-                // ===============================
-                // 5️⃣ JWT authentication filter
-                // ===============================
                 .addFilterBefore(
                         new JwtAuthenticationFilter(jwtService),
                         UsernamePasswordAuthenticationFilter.class
                 )
 
-                // ===============================
-                // 6️⃣ OAuth2 (Discord linking only)
-                // ===============================
                 .oauth2Login(oauth2 -> oauth2
                         .authorizationEndpoint(authorization -> authorization
                                 .authorizationRequestResolver(customAuthorizationRequestResolver)

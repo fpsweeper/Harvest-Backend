@@ -1,6 +1,7 @@
 package com.fpsweeper.harvest.trading.service;
 
 import com.fpsweeper.harvest.auth.exceptions.InsufficientPointsException;
+import com.fpsweeper.harvest.notification.NotificationService;
 import com.fpsweeper.harvest.points.PointsService;
 import com.fpsweeper.harvest.trading.*;
 import org.slf4j.Logger;
@@ -19,14 +20,10 @@ public class BotPointsDeductionService {
 
     private static final Logger log = LoggerFactory.getLogger(BotPointsDeductionService.class);
 
-    @Autowired
-    private PointsService pointsService;
-
-    @Autowired
-    private BotPointsUsageRepository botPointsUsageRepository;
-
-    @Autowired
-    private TradingBotRepository botRepository;
+    @Autowired private PointsService pointsService;
+    @Autowired private BotPointsUsageRepository botPointsUsageRepository;
+    @Autowired private TradingBotRepository botRepository;
+    @Autowired private NotificationService notificationService;
 
     /**
      * Deduct points for a trade execution.
@@ -46,7 +43,7 @@ public class BotPointsDeductionService {
     public boolean deductPointsForTrade(TradingBot bot, String tradeType) {
         BigDecimal pointsToDeduct = bot.getPointsPerDay();
 
-        // Check if user has enough points
+        // ── Pre-check: insufficient points → auto-pause ────────────────────────
         if (!pointsService.hasEnoughPoints(bot.getUserId(), pointsToDeduct)) {
             log.warn("⚠️ Insufficient points for bot: {} (user: {}). Auto-pausing.",
                     bot.getName(), bot.getUserId());
@@ -56,11 +53,14 @@ public class BotPointsDeductionService {
             botRepository.save(bot);
 
             log.info("⏸️ Bot auto-paused due to insufficient points: {}", bot.getName());
+
+            // ✅ Fixed: was missing notification in this path
+            notificationService.notifyBotAutoPaused(bot.getUserId(), bot.getName());
+
             return false;
         }
 
         try {
-            // Deduct from user_points + write to point_transactions
             String description = String.format("Bot '%s' trade executed: %s %s",
                     bot.getName(), tradeType, bot.getTradingPair());
 
@@ -71,13 +71,10 @@ public class BotPointsDeductionService {
                     bot.getId()
             );
 
-            // Accumulate into today's bot_points_usage record
             accumulateDailyUsage(bot, pointsToDeduct);
 
-            // Update total_points_consumed on the bot
             BigDecimal newTotal = bot.getTotalPointsConsumed().add(pointsToDeduct);
             bot.setTotalPointsConsumed(newTotal);
-            // Note: bot entity is managed in the scheduler transaction, will be saved there
 
             log.info("💰 Deducted {} points for {} trade on bot: {} (total consumed: {})",
                     pointsToDeduct, tradeType, bot.getName(), newTotal);
@@ -85,12 +82,14 @@ public class BotPointsDeductionService {
             return true;
 
         } catch (InsufficientPointsException e) {
-            // Race condition safety net
+            // Race condition safety net — another thread deducted points between the check above
             log.warn("⚠️ Race condition — insufficient points for bot: {}", bot.getName());
 
             bot.setStatus(BotStatus.PAUSED);
             bot.setPausedAt(Instant.now());
             botRepository.save(bot);
+
+            notificationService.notifyBotAutoPaused(bot.getUserId(), bot.getName());
 
             return false;
         }

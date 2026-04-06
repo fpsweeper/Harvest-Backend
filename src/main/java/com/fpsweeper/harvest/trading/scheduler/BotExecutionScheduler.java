@@ -118,10 +118,10 @@ public class BotExecutionScheduler {
 
                 if (signal.isBuy()) {
                     tradeExecutionService.executeBuy(bot, signal.getSymbol(), signal.getAmount(),
-                            signal.getReason(), signal.getIndicators());
+                            signal.getReason());
                 } else if (signal.isSell()) {
                     tradeExecutionService.executeSell(bot, signal.getSymbol(), signal.getAmount(),
-                            signal.getReason(), signal.getIndicators());
+                            signal.getReason());
                 }
             } else {
                 log.info("⏸️ Bot holding - {}", signal.getReason());

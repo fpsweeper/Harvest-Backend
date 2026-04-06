@@ -1,6 +1,7 @@
 package com.fpsweeper.harvest.points;
 
 import com.fpsweeper.harvest.auth.exceptions.InsufficientPointsException;
+import com.fpsweeper.harvest.notification.NotificationService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -23,6 +24,8 @@ public class PointsService {
 
     @Autowired
     private PointTransactionRepository transactionRepository;
+
+    @Autowired private NotificationService notificationService;
 
     /**
      * Get user's current point balance
@@ -129,6 +132,8 @@ public class PointsService {
 
         System.out.println("✅ Deducted " + amount + " points from user " + userId +
                 ". New balance: " + balanceAfter);
+
+        if( balanceAfter.compareTo(new BigDecimal(10)) < 0) notificationService.notifyLowPoints(userId, balanceAfter);
     }
 
     /**

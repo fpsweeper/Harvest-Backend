@@ -1,5 +1,6 @@
 package com.fpsweeper.harvest.trading.service;
 
+import com.fpsweeper.harvest.notification.NotificationService;
 import com.fpsweeper.harvest.trading.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -20,28 +21,16 @@ public class TradeExecutionService {
     private static final BigDecimal SLIPPAGE_PERCENT    = new BigDecimal("0.1");
     private static final BigDecimal TRADING_FEE_PERCENT = new BigDecimal("0.1");
 
-    @Autowired private BotTradeRepository     tradeRepository;
-    @Autowired private BotPositionRepository  positionRepository;
-    @Autowired private TradingBotRepository   botRepository;
-    @Autowired private MarketDataService      marketDataService;
+    @Autowired private BotTradeRepository tradeRepository;
+    @Autowired private BotPositionRepository positionRepository;
+    @Autowired private TradingBotRepository botRepository;
+    @Autowired private MarketDataService marketDataService;
+    @Autowired private NotificationService notificationService;
 
-    // ─── BUY ──────────────────────────────────────────────────────────────────
-
-    /** Execute a BUY order — without indicator snapshot (e.g. stop-bot close) */
     @Transactional
     public BotTrade executeBuy(TradingBot bot, String symbol, BigDecimal quantity, String reason) {
-        return executeBuy(bot, symbol, quantity, reason, null);
-    }
-
-    /**
-     * Execute a BUY order with indicator snapshot.
-     * The indicators map is stored as JSONB on the trade record so users can
-     * later see exactly what RSI/MACD/price looked like when the signal fired.
-     */
-    @Transactional
-    public BotTrade executeBuy(TradingBot bot, String symbol, BigDecimal quantity,
-                               String reason, Map<String, BigDecimal> indicators) {
-        log.info("🛒 BUY | bot: {} | symbol: {} | qty: {}", bot.getName(), symbol, quantity);
+        log.info("🛒 Executing BUY order for bot: {} | Symbol: {} | Quantity: {}",
+                bot.getName(), symbol, quantity);
 
         try {
             BigDecimal marketPrice    = marketDataService.getCurrentPrice(symbol);
@@ -71,28 +60,24 @@ public class TradeExecutionService {
             trade.setIsSimulation(true);
             trade.setExecutedAt(Instant.now());
 
-            // ✅ Store indicator snapshot
-            if (indicators != null && !indicators.isEmpty()) {
-                trade.setIndicatorValues(buildIndicatorSnapshot(indicators));
-            }
-
             BotTrade savedTrade = tradeRepository.save(trade);
 
-            // Create or average-down position
-            Optional<BotPosition> existing = positionRepository
+            Optional<BotPosition> existingPosition = positionRepository
                     .findByBotIdAndSymbolAndStatus(bot.getId(), symbol, PositionStatus.OPEN);
 
             BotPosition position;
-            if (existing.isPresent()) {
-                position = existing.get();
-                BigDecimal newQty   = position.getQuantity().add(quantity);
-                BigDecimal newValue = position.getEntryValue().add(totalValue);
-                BigDecimal newAvg   = newValue.divide(newQty, 2, RoundingMode.HALF_UP);
-                position.setQuantity(newQty);
+            if (existingPosition.isPresent()) {
+                position = existingPosition.get();
+                BigDecimal oldQuantity = position.getQuantity();
+                BigDecimal oldValue    = position.getEntryValue();
+                BigDecimal newQuantity = oldQuantity.add(quantity);
+                BigDecimal newValue    = oldValue.add(totalValue);
+                BigDecimal newAvgPrice = newValue.divide(newQuantity, 2, RoundingMode.HALF_UP);
+                position.setQuantity(newQuantity);
                 position.setEntryValue(newValue);
-                position.setEntryPrice(newAvg);
+                position.setEntryPrice(newAvgPrice);
                 position.setUpdatedAt(Instant.now());
-                log.info("📊 Averaged position | new avg: ${}", newAvg);
+                log.info("📊 Updated position | Avg Price: ${} → ${}", oldValue.divide(oldQuantity, 2, RoundingMode.HALF_UP), newAvgPrice);
             } else {
                 position = new BotPosition();
                 position.setBotId(bot.getId());
@@ -103,42 +88,34 @@ public class TradeExecutionService {
                 position.setEntryTradeId(savedTrade.getId());
                 position.setStatus(PositionStatus.OPEN);
                 position.setOpenedAt(Instant.now());
-                log.info("📍 New position | entry: ${}", executionPrice);
+                log.info("📍 Created new position | Entry: ${}", executionPrice);
             }
 
             positionRepository.save(position);
-
             bot.setCurrentBalance(bot.getCurrentBalance().subtract(totalCost));
             bot.setLastExecutionTime(Instant.now());
             bot.setExecutionCount(bot.getExecutionCount() + 1);
             botRepository.save(bot);
 
-            log.info("✅ BUY done | price: ${} | total: ${} | fees: ${} | balance: ${}",
+            log.info("✅ BUY executed successfully | Price: ${} | Total: ${} | Fees: ${} | New Balance: ${}",
                     executionPrice, totalValue, fees, bot.getCurrentBalance());
+
+            // 🔔 Notify user of buy
+            notificationService.notifyBotBuy(
+                    bot.getUserId(), bot.getName(), symbol, quantity, executionPrice);
 
             return savedTrade;
 
         } catch (Exception e) {
-            log.error("❌ BUY failed: {}", e.getMessage(), e);
+            log.error("❌ Error executing BUY order: {}", e.getMessage(), e);
             throw new RuntimeException("Failed to execute buy order: " + e.getMessage(), e);
         }
     }
 
-    // ─── SELL ─────────────────────────────────────────────────────────────────
-
-    /** Execute a SELL order — without indicator snapshot (e.g. stop-bot close) */
     @Transactional
     public BotTrade executeSell(TradingBot bot, String symbol, BigDecimal quantity, String reason) {
-        return executeSell(bot, symbol, quantity, reason, null);
-    }
-
-    /**
-     * Execute a SELL order with indicator snapshot.
-     */
-    @Transactional
-    public BotTrade executeSell(TradingBot bot, String symbol, BigDecimal quantity,
-                                String reason, Map<String, BigDecimal> indicators) {
-        log.info("💰 SELL | bot: {} | symbol: {} | qty: {}", bot.getName(), symbol, quantity);
+        log.info("💰 Executing SELL order for bot: {} | Symbol: {} | Quantity: {}",
+                bot.getName(), symbol, quantity);
 
         try {
             BigDecimal marketPrice    = marketDataService.getCurrentPrice(symbol);
@@ -153,21 +130,22 @@ public class TradeExecutionService {
             Optional<BotPosition> positionOpt = positionRepository
                     .findByBotIdAndSymbolAndStatus(bot.getId(), symbol, PositionStatus.OPEN);
 
-            if (positionOpt.isEmpty()) {
-                log.error("❌ No open position for symbol: {}", symbol);
+            if (!positionOpt.isPresent()) {
+                log.error("❌ No open position found for symbol: {}", symbol);
                 throw new RuntimeException("No open position to sell");
             }
 
             BotPosition position = positionOpt.get();
 
             if (position.getQuantity().compareTo(quantity) < 0) {
-                log.error("❌ Insufficient position! Trying: {}, Available: {}", quantity, position.getQuantity());
+                log.error("❌ Insufficient position! Trying to sell: {}, Available: {}",
+                        quantity, position.getQuantity());
                 throw new RuntimeException("Insufficient position to sell");
             }
 
-            BigDecimal costBasis        = position.getEntryPrice().multiply(quantity);
-            BigDecimal profitLoss       = totalValue.subtract(costBasis).subtract(fees);
-            BigDecimal profitLossPct    = profitLoss.divide(costBasis, 4, RoundingMode.HALF_UP)
+            BigDecimal costBasis         = position.getEntryPrice().multiply(quantity);
+            BigDecimal profitLoss        = totalValue.subtract(costBasis).subtract(fees);
+            BigDecimal profitLossPercent = profitLoss.divide(costBasis, 4, RoundingMode.HALF_UP)
                     .multiply(BigDecimal.valueOf(100));
 
             BotTrade trade = new BotTrade();
@@ -180,97 +158,78 @@ public class TradeExecutionService {
             trade.setFees(fees);
             trade.setSlippage(slippageAmount);
             trade.setProfitLoss(profitLoss);
-            trade.setProfitLossPercentage(profitLossPct);
+            trade.setProfitLossPercentage(profitLossPercent);
             trade.setStatus(TradeStatus.FILLED);
             trade.setIsSimulation(true);
             trade.setPositionId(position.getId());
             trade.setExecutedAt(Instant.now());
 
-            // ✅ Store indicator snapshot
-            if (indicators != null && !indicators.isEmpty()) {
-                trade.setIndicatorValues(buildIndicatorSnapshot(indicators));
-            }
-
             BotTrade savedTrade = tradeRepository.save(trade);
 
             if (position.getQuantity().compareTo(quantity) == 0) {
                 position.closePosition(executionPrice, savedTrade.getId());
-                log.info("📍 Position CLOSED | entry: ${} | exit: ${} | P&L: ${} ({}%)",
-                        position.getEntryPrice(), executionPrice, profitLoss, profitLossPct);
+                log.info("📍 Position CLOSED | Entry: ${} | Exit: ${} | P&L: ${} ({}%)",
+                        position.getEntryPrice(), executionPrice, profitLoss, profitLossPercent);
             } else {
-                BigDecimal remaining      = position.getQuantity().subtract(quantity);
-                BigDecimal soldEntryValue = position.getEntryPrice().multiply(quantity);
-                position.setQuantity(remaining);
-                position.setEntryValue(position.getEntryValue().subtract(soldEntryValue));
+                BigDecimal remainingQuantity = position.getQuantity().subtract(quantity);
+                BigDecimal soldValue         = position.getEntryPrice().multiply(quantity);
+                BigDecimal remainingValue    = position.getEntryValue().subtract(soldValue);
+                position.setQuantity(remainingQuantity);
+                position.setEntryValue(remainingValue);
                 position.setUpdatedAt(Instant.now());
-                log.info("📍 Position REDUCED | sold: {} | remaining: {}", quantity, remaining);
+                log.info("📍 Position REDUCED | Sold: {} | Remaining: {}", quantity, remainingQuantity);
             }
 
             positionRepository.save(position);
-
             bot.setCurrentBalance(bot.getCurrentBalance().add(netProceeds));
             bot.setLastExecutionTime(Instant.now());
             bot.setExecutionCount(bot.getExecutionCount() + 1);
             botRepository.save(bot);
 
-            log.info("✅ SELL done | price: ${} | total: ${} | P&L: ${} ({}%) | balance: ${}",
-                    executionPrice, totalValue, profitLoss, profitLossPct, bot.getCurrentBalance());
+            log.info("✅ SELL executed successfully | Price: ${} | Total: ${} | Fees: ${} | P&L: ${} ({}%) | New Balance: ${}",
+                    executionPrice, totalValue, fees, profitLoss, profitLossPercent, bot.getCurrentBalance());
+
+            // 🔔 Notify user — detect TP/SL from reason string to send richer notification
+            String reasonLower = reason != null ? reason.toLowerCase() : "";
+            if (reasonLower.contains("take profit")) {
+                notificationService.notifyTakeProfit(
+                        bot.getUserId(), bot.getName(), symbol, profitLoss, profitLossPercent);
+            } else if (reasonLower.contains("stop loss")) {
+                notificationService.notifyStopLoss(
+                        bot.getUserId(), bot.getName(), symbol, profitLoss, profitLossPercent);
+            } else {
+                notificationService.notifyBotSell(
+                        bot.getUserId(), bot.getName(), symbol, quantity, executionPrice, profitLoss);
+            }
 
             return savedTrade;
 
         } catch (Exception e) {
-            log.error("❌ SELL failed: {}", e.getMessage(), e);
+            log.error("❌ Error executing SELL order: {}", e.getMessage(), e);
             throw new RuntimeException("Failed to execute sell order: " + e.getMessage(), e);
         }
     }
 
-    // ─── Unrealized P&L ───────────────────────────────────────────────────────
-
     @Transactional
     public void updateUnrealizedPnL(TradingBot bot) {
-        List<BotPosition> openPositions = positionRepository
-                .findByBotIdAndStatus(bot.getId(), PositionStatus.OPEN);
+        List<BotPosition> openPositions = positionRepository.findByBotIdAndStatus(
+                bot.getId(), PositionStatus.OPEN);
+
         if (openPositions.isEmpty()) return;
 
-        log.debug("📊 Updating unrealized P&L for {} positions", openPositions.size());
+        log.debug("📊 Updating unrealized P&L for {} open positions", openPositions.size());
 
         for (BotPosition position : openPositions) {
             try {
                 BigDecimal currentPrice = marketDataService.getCurrentPrice(position.getSymbol());
                 position.updateUnrealizedPnl(currentPrice);
                 positionRepository.save(position);
+                log.debug("   {} - Entry: ${}, Current: ${}, Unrealized P&L: ${} ({}%)",
+                        position.getSymbol(), position.getEntryPrice(), currentPrice,
+                        position.getUnrealizedPnl(), position.getUnrealizedPnlPercentage());
             } catch (Exception e) {
-                log.error("❌ P&L update failed for position {}: {}", position.getId(), e.getMessage());
+                log.error("❌ Error updating P&L for position {}: {}", position.getId(), e.getMessage());
             }
         }
-    }
-
-    // ─── Helper ───────────────────────────────────────────────────────────────
-
-    /**
-     * Build a clean indicator snapshot map for storage.
-     * Converts BigDecimal values to Double for JSON serialization.
-     * Only includes the most useful indicators — keeps the JSONB lean.
-     */
-    private Map<String, Object> buildIndicatorSnapshot(Map<String, BigDecimal> indicators) {
-        Map<String, Object> snapshot = new LinkedHashMap<>();
-
-        String[] keys = {
-                "CLOSE_PRICE", "RSI_14", "RSI_7",
-                "MACD", "MACD_SIGNAL", "MACD_HISTOGRAM",
-                "MA_20", "MA_50", "MA_200",
-                "EMA_12", "EMA_26",
-                "BB_UPPER", "BB_MIDDLE", "BB_LOWER",
-                "VOLUME"
-        };
-
-        for (String key : keys) {
-            BigDecimal val = indicators.get(key);
-            if (val != null) {
-                snapshot.put(key, val.setScale(4, RoundingMode.HALF_UP).doubleValue());
-            }
-        }
-
-        return snapshot;
     }
 }

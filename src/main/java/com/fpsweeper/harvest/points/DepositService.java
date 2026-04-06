@@ -1,6 +1,7 @@
 package com.fpsweeper.harvest.points;
 
 import com.fpsweeper.harvest.auth.exceptions.DepositException;
+import com.fpsweeper.harvest.notification.NotificationService;
 import com.fpsweeper.harvest.wallet.SolanaWalletRepository;
 import com.fpsweeper.harvest.wallet.UserWallet;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -20,90 +21,79 @@ import java.util.*;
 @Service
 public class DepositService {
 
-    @Autowired
-    private PointDepositRepository depositRepository;
+    @Autowired private PointDepositRepository depositRepository;
+    @Autowired private SupportedChainRepository chainRepository;
+    @Autowired private PointsService pointsService;
+    @Autowired private SolanaWalletRepository walletRepository;
+    @Autowired private NotificationService notificationService;
 
-    @Autowired
-    private SupportedChainRepository chainRepository;
-
-    @Autowired
-    private PointsService pointsService;
-
-    @Autowired
-    private SolanaWalletRepository walletRepository;
+    // ✅ Inject the packages repository so we can look up points by price
+    @Autowired private PointsPackageRepository packagesRepository;
 
     @Value("${points.conversion.rate:0.5}")
     private BigDecimal conversionRate;
 
-    private static final BigDecimal CONVERSION_RATE = new BigDecimal("0.5");
-
     /**
-     * Get current conversion rate (USD to Points)
+     * Look up points for a given USD base amount from the points_packages table.
+     * Falls back to flat conversion rate if no matching package is found.
+     *
+     * Examples with current packages:
+     *   $10  → 30 pts
+     *   $50  → 200 pts
+     *   $200 → 900 pts
+     *   $400 → 2000 pts
      */
-    public BigDecimal getConversionRate() {
-        // In future, you could fetch this from database or configuration
-        // For now, hardcoded: $1 = 0.5 points
-        return CONVERSION_RATE;
+    public BigDecimal calculatePoints(BigDecimal baseAmountUsd) {
+        return packagesRepository.findByActiveTrueOrderBySortOrderAsc()
+                .stream()
+                .filter(p -> p.getPriceUsd().compareTo(baseAmountUsd) == 0)
+                .map(PointsPackage::getPoints)
+                .findFirst()
+                .orElseGet(() -> {
+                    // Fallback: flat rate (should never happen for valid packages)
+                    System.out.println("⚠️ No package found for $" + baseAmountUsd + " — using flat conversion rate");
+                    return baseAmountUsd.multiply(conversionRate).setScale(2, RoundingMode.HALF_UP);
+                });
     }
 
-    /**
-     * Get list of supported chains
-     */
+    public BigDecimal getConversionRate() { return conversionRate; }
+
     public List<SupportedChain> getSupportedChains() {
         return chainRepository.findByIsActive(true);
     }
 
-    /**
-     * Get specific chain
-     */
     public Optional<SupportedChain> getChain(String chainName) {
         return chainRepository.findByChainNameAndIsActive(chainName.toUpperCase(), true);
     }
 
-    /**
-     * Calculate points from USD amount
-     */
-    public BigDecimal calculatePoints(BigDecimal amountUsd) {
-        return amountUsd.multiply(getConversionRate())
-                .setScale(2, RoundingMode.HALF_UP);
-    }
+    // ── Submit deposit (with memo) ─────────────────────────────────────────
 
-    /**
-     * Submit a new deposit
-     */
     @Transactional
     public PointDeposit submitDeposit(
             UUID userId,
             String transactionHash,
             String chain,
             BigDecimal amountUsd,
-            String memo // ✅ NEW: memo parameter
+            String memo
     ) {
-        // Validate chain is supported
         SupportedChain supportedChain = chainRepository
                 .findByChainNameAndIsActive(chain.toUpperCase(), true)
                 .orElseThrow(() -> new DepositException("Chain not supported: " + chain));
 
-        // Check minimum deposit
-        if (amountUsd.compareTo(supportedChain.getMinDepositUsd()) < 0) {
-            throw new DepositException(
-                    "Minimum deposit is $" + supportedChain.getMinDepositUsd()
-            );
-        }
+        if (amountUsd.compareTo(supportedChain.getMinDepositUsd()) < 0)
+            throw new DepositException("Minimum deposit is $" + supportedChain.getMinDepositUsd());
 
-        // Check if transaction hash already exists
-        if (depositRepository.existsByTransactionHash(transactionHash)) {
+        if (depositRepository.existsByTransactionHash(transactionHash))
             throw new DepositException("Transaction already submitted");
-        }
 
-        // Calculate points
+        // ✅ Use package-based points lookup
         BigDecimal points = calculatePoints(amountUsd);
 
         PointDeposit deposit = new PointDeposit();
         deposit.setUserId(userId);
         deposit.setTransactionHash(transactionHash);
         deposit.setChain(chain.toUpperCase());
-        deposit.setMemo(memo); // Optional now
+        deposit.setMemo(memo);
         deposit.setAmountUsd(amountUsd);
         deposit.setPointsIssued(points);
         deposit.setConversionRate(conversionRate);
@@ -112,25 +102,61 @@ public class DepositService {
         PointDeposit saved = depositRepository.save(deposit);
 
         System.out.println("📝 Deposit submitted: " + transactionHash +
-                " | User: " + userId +
-                " | Chain: " + chain +
-                " | Amount: $" + amountUsd +
-                " | Points: " + points +
-                (memo != null ? " | Memo: " + memo : " | (no memo - wallet linked)"));
+                " | User: " + userId + " | Chain: " + chain +
+                " | Amount: $" + amountUsd + " | Points: " + points +
+                (memo != null ? " | Memo: " + memo : ""));
 
         return saved;
     }
 
-    /**
-     * Confirm a deposit and credit points
-     */
+    // ── Submit deposit (exact amount — main flow) ──────────────────────────
+
     @Transactional
-    public void confirmDeposit(
-            UUID depositId,
-            String fromWallet,
-            Long blockNumber,
-            Integer confirmations
+    public PointDeposit submitDeposit(
+            UUID userId,
+            String transactionHash,
+            String chain,
+            BigDecimal exactAmountUsd
     ) {
+        if (depositRepository.existsByTransactionHash(transactionHash))
+            throw new RuntimeException("Transaction already submitted");
+
+        SupportedChain supportedChain = chainRepository.findByChainName(chain.toUpperCase())
+                .orElseThrow(() -> new RuntimeException("Chain not supported: " + chain));
+
+        // Strip security cents: $200.24 → $200
+        BigDecimal baseAmount = exactAmountUsd.setScale(0, RoundingMode.DOWN);
+
+        if (baseAmount.compareTo(supportedChain.getMinDepositUsd()) < 0)
+            throw new RuntimeException("Minimum deposit is $" + supportedChain.getMinDepositUsd());
+
+        // ✅ Look up points from package — NOT flat rate
+        BigDecimal points = calculatePoints(baseAmount);
+
+        PointDeposit deposit = new PointDeposit();
+        deposit.setUserId(userId);
+        deposit.setTransactionHash(transactionHash);
+        deposit.setChain(chain.toUpperCase());
+        deposit.setAmountUsd(baseAmount);
+        deposit.setExactAmountUsd(exactAmountUsd);
+        deposit.setPointsIssued(points);
+        deposit.setConversionRate(conversionRate);
+        deposit.setStatus("PENDING");
+
+        PointDeposit saved = depositRepository.save(deposit);
+
+        System.out.println("📝 Deposit submitted: " + transactionHash +
+                " | User: " + userId + " | Chain: " + chain +
+                " | Base: $" + baseAmount + " | Exact: $" + exactAmountUsd +
+                " | Points: " + points);
+
+        return saved;
+    }
+
+    // ── Confirm deposit ────────────────────────────────────────────────────
+
+    @Transactional
+    public void confirmDeposit(UUID depositId, String fromWallet, Long blockNumber, Integer confirmations) {
         PointDeposit deposit = depositRepository.findById(depositId)
                 .orElseThrow(() -> new RuntimeException("Deposit not found"));
 
@@ -139,7 +165,6 @@ public class DepositService {
             return;
         }
 
-        // Update deposit status
         deposit.setStatus("CONFIRMED");
         deposit.setFromWallet(fromWallet);
         deposit.setBlockNumber(blockNumber);
@@ -147,7 +172,6 @@ public class DepositService {
         deposit.setConfirmedAt(Instant.now());
         depositRepository.save(deposit);
 
-        // Credit points to user
         pointsService.addPoints(
                 deposit.getUserId(),
                 deposit.getPointsIssued(),
@@ -158,36 +182,26 @@ public class DepositService {
         System.out.println("✅ Deposit confirmed: " + deposit.getTransactionHash() +
                 " | User: " + deposit.getUserId() +
                 " | Points added: " + deposit.getPointsIssued());
+
+        notificationService.notifyDepositSuccess(deposit.getUserId(), deposit.getPointsIssued());
     }
 
-    /**
-     * Mark deposit as failed
-     */
+    // ── Fail / verify ──────────────────────────────────────────────────────
+
     @Transactional
     public void failDeposit(UUID depositId, String reason) {
         PointDeposit deposit = depositRepository.findById(depositId)
                 .orElseThrow(() -> new RuntimeException("Deposit not found"));
-
         deposit.setStatus("FAILED");
         deposit.setFailureReason(reason);
         depositRepository.save(deposit);
-
-        System.out.println("❌ Deposit failed: " + deposit.getTransactionHash() +
-                " | Reason: " + reason);
+        System.out.println("❌ Deposit failed: " + deposit.getTransactionHash() + " | Reason: " + reason);
     }
 
-    /**
-     * Update deposit verification progress
-     */
     @Transactional
-    public void updateDepositVerification(
-            UUID depositId,
-            Integer confirmations,
-            Long blockNumber
-    ) {
+    public void updateDepositVerification(UUID depositId, Integer confirmations, Long blockNumber) {
         PointDeposit deposit = depositRepository.findById(depositId)
                 .orElseThrow(() -> new RuntimeException("Deposit not found"));
-
         deposit.setStatus("VERIFIED");
         deposit.setConfirmations(confirmations);
         deposit.setBlockNumber(blockNumber);
@@ -195,154 +209,67 @@ public class DepositService {
         depositRepository.save(deposit);
     }
 
-    /**
-     * Get deposit history for user
-     */
+    // ── Queries ────────────────────────────────────────────────────────────
+
     public Page<PointDeposit> getDepositHistory(UUID userId, int page, int size) {
         Pageable pageable = PageRequest.of(page, size, Sort.by("submittedAt").descending());
         return depositRepository.findByUserId(userId, pageable);
     }
 
-    /**
-     * Get deposit by transaction hash
-     */
     public Optional<PointDeposit> getDepositByHash(String transactionHash) {
         return depositRepository.findByTransactionHash(transactionHash);
     }
 
-    /**
-     * Get pending deposits for background job
-     */
     public List<PointDeposit> getPendingDeposits() {
         return depositRepository.findByStatusOrderBySubmittedAtAsc("PENDING");
     }
 
-    /**
-     * Get verified deposits awaiting confirmation
-     */
     public List<PointDeposit> getVerifiedDeposits() {
         return depositRepository.findByStatusOrderBySubmittedAtAsc("VERIFIED");
     }
 
-    /**
-     * Generate random security amount between 0.01 and 1.00
-     */
+    // ── Deposit instructions (legacy / unused by main flow) ───────────────
+
     private BigDecimal generateSecurityAmount() {
-        Random random = new Random();
-        // Generate random cents between 1 and 100
-        int cents = random.nextInt(100) + 1; // 1 to 100 cents
+        int cents = new Random().nextInt(100) + 1;
         return new BigDecimal(cents).divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP);
     }
 
-    /**
-     * Get deposit instructions with exact amount including security digits
-     */
     public Map<String, Object> getDepositInstructions(UUID userId, String chain, BigDecimal baseAmount) {
-        // Get chain config
         SupportedChain supportedChain = chainRepository.findByChainName(chain.toUpperCase())
                 .orElseThrow(() -> new RuntimeException("Chain not supported: " + chain));
 
-        // Validate minimum deposit
-        if (baseAmount.compareTo(supportedChain.getMinDepositUsd()) < 0) {
+        if (baseAmount.compareTo(supportedChain.getMinDepositUsd()) < 0)
             throw new RuntimeException("Minimum deposit is $" + supportedChain.getMinDepositUsd());
-        }
 
-        // ✅ Generate random security amount
         BigDecimal securityAmount = generateSecurityAmount();
-        BigDecimal exactAmount = baseAmount.add(securityAmount);
+        BigDecimal exactAmount    = baseAmount.add(securityAmount);
 
-        // Calculate points based on BASE amount (not including security digits)
-        BigDecimal conversionRate = getConversionRate();
-        BigDecimal points = baseAmount.multiply(conversionRate)
-                .setScale(2, RoundingMode.HALF_UP);
+        // ✅ Look up points from package
+        BigDecimal points = calculatePoints(baseAmount);
 
-        // Get user's linked wallet (optional)
-        Optional<UserWallet> linkedWallet = walletRepository.findByUserIdAndChain(
-                userId,
-                chain.toUpperCase()
-        );
+        Optional<UserWallet> linkedWallet = walletRepository.findByUserIdAndChain(userId, chain.toUpperCase());
 
         Map<String, Object> instructions = new HashMap<>();
         instructions.put("chain", chain.toUpperCase());
         instructions.put("depositAddress", supportedChain.getPlatformWalletAddress());
-        instructions.put("baseAmount", baseAmount);  // ✅ Original amount
-        instructions.put("securityAmount", securityAmount);  // ✅ Random amount
-        instructions.put("exactAmount", exactAmount);  // ✅ Total amount to send
+        instructions.put("baseAmount", baseAmount);
+        instructions.put("securityAmount", securityAmount);
+        instructions.put("exactAmount", exactAmount);
         instructions.put("token", "USDC");
         instructions.put("tokenAddress", supportedChain.getUsdcTokenAddress());
         instructions.put("pointsToReceive", points);
         instructions.put("hasLinkedWallet", linkedWallet.isPresent());
+        linkedWallet.ifPresent(w -> instructions.put("linkedWalletAddress", w.getWalletAddress()));
 
-        if (linkedWallet.isPresent()) {
-            instructions.put("linkedWalletAddress", linkedWallet.get().getWalletAddress());
-        }
-
-        // ✅ Updated instructions
         Map<String, String> steps = new HashMap<>();
         steps.put("step1", "Send exactly " + exactAmount + " USDC to the address above");
         steps.put("step2", "IMPORTANT: Send exactly " + exactAmount + " (including " + securityAmount + " security amount)");
         steps.put("step3", "Copy the transaction hash after sending");
         steps.put("step4", "Submit the transaction hash below");
         steps.put("step5", "Your " + points + " points will be credited after confirmation");
-
         instructions.put("instructions", steps);
 
         return instructions;
-    }
-
-    /**
-     * Submit a deposit with exact amount verification
-     */
-    @Transactional
-    public PointDeposit submitDeposit(
-            UUID userId,
-            String transactionHash,
-            String chain,
-            BigDecimal exactAmountUsd  // ✅ User submits the exact amount they sent
-    ) {
-        // Check for duplicate transaction
-        if (depositRepository.existsByTransactionHash(transactionHash)) {
-            throw new RuntimeException("Transaction already submitted");
-        }
-
-        // Validate chain
-        SupportedChain supportedChain = chainRepository.findByChainName(chain.toUpperCase())
-                .orElseThrow(() -> new RuntimeException("Chain not supported: " + chain));
-
-        // Extract base amount (remove cents to get package amount)
-        // Example: $50.37 → $50.00
-        BigDecimal baseAmount = exactAmountUsd.setScale(0, RoundingMode.DOWN);
-
-        // Validate minimum (base amount)
-        if (baseAmount.compareTo(supportedChain.getMinDepositUsd()) < 0) {
-            throw new RuntimeException("Minimum deposit is $" + supportedChain.getMinDepositUsd());
-        }
-
-        // Calculate points based on BASE amount only
-        BigDecimal conversionRate = getConversionRate();
-        BigDecimal points = baseAmount.multiply(conversionRate)
-                .setScale(2, RoundingMode.HALF_UP);
-
-        // Create deposit record
-        PointDeposit deposit = new PointDeposit();
-        deposit.setUserId(userId);
-        deposit.setTransactionHash(transactionHash);
-        deposit.setChain(chain.toUpperCase());
-        deposit.setAmountUsd(baseAmount);  // Base amount (e.g., $50)
-        deposit.setExactAmountUsd(exactAmountUsd);  // ✅ Exact amount (e.g., $50.37)
-        deposit.setPointsIssued(points);
-        deposit.setConversionRate(conversionRate);
-        deposit.setStatus("PENDING");
-
-        PointDeposit saved = depositRepository.save(deposit);
-
-        System.out.println("📝 Deposit submitted: " + transactionHash +
-                " | User: " + userId +
-                " | Chain: " + chain +
-                " | Base: $" + baseAmount +
-                " | Exact: $" + exactAmountUsd +  // ✅ Log exact amount
-                " | Points: " + points);
-
-        return saved;
     }
 }
