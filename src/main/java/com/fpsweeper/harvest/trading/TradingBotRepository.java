@@ -46,4 +46,6 @@ public interface TradingBotRepository extends JpaRepository<TradingBot, UUID> {
     @Query("SELECT b FROM TradingBot b WHERE b.status = com.fpsweeper.harvest.trading.BotStatus.STOPPED " +
             "AND b.stoppedAt < :cutoffTime")
     List<TradingBot> findStoppedBotsBefore(@Param("cutoffTime") Instant cutoffTime);
+
+    long countByStatus(BotStatus status);
 }

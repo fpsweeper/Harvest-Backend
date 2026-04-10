@@ -91,6 +91,7 @@ public class SecurityConfig {
                                 "/api/chains/supported",
                                 "/api/chains/pricing"
                         ).permitAll()
+                        .requestMatchers("/api/admin/**").hasRole("ADMIN")
                         .requestMatchers("/api/market-data/**").permitAll()
                         .requestMatchers("/api/test/**").permitAll()
 
@@ -109,7 +110,7 @@ public class SecurityConfig {
                                 "/api/points/**",
                                 "/api/deposits/**",
                                 "/api/chains/calculate",
-                                "/api/admin/**",
+                                "/api/admin/verify-deposits",
                                 "/api/wallet/**",
                                 "/api/pending-deposits/**"
                         ).authenticated()

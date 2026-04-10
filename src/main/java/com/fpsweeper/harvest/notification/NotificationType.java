@@ -18,5 +18,7 @@ public enum NotificationType {
     LOW_POINTS,        // balance < 10 pts
 
     // System
-    ERROR
+    ERROR,
+
+    INFO
 }
