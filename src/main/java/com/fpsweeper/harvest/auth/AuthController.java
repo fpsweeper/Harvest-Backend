@@ -28,6 +28,8 @@ import org.springframework.web.bind.annotation.*;
 @RequestMapping("/auth")
 public class AuthController {
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(AuthController.class);
+
     private final AuthService authService;
     private final JwtService jwtService;
     private final UserRepository userRepo;
@@ -64,6 +66,7 @@ public class AuthController {
     @PostMapping("/register")
     public ResponseEntity<Void> register(@RequestBody RegisterRequest req) {
         authService.register(req.getEmail(), req.getPassword());
+        log.info("USER_REGISTER email={}", req.getEmail());
         return ResponseEntity.ok().build();
     }
 
@@ -110,6 +113,9 @@ public class AuthController {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(null);
         }
 
+        // ✅ Re-fetch from DB to get the latest values (e.g. simulationCreditLimit updated by admin)
+        user = userRepo.findById(user.getId()).orElse(user);
+
         // ✅ UPDATED: Get primary Solana wallet (backward compatible)
         // For existing users, this returns their SOLANA wallet
         // For multi-chain users, this returns their primary wallet
@@ -123,7 +129,8 @@ public class AuthController {
                 user.getEmail(),
                 user.getRole(),
                 user.getAuthProvider(),
-                wallet  // SolanaWallets entity (which is the same as UserWallet)
+                wallet,
+                user.getSimulationCreditLimit()
         ));
     }
     @PostMapping("/login")
@@ -147,15 +154,7 @@ public class AuthController {
         }
 
         String token = jwtService.generateToken(user);
-
-        // ✅ DON'T set Domain - let browser handle it
-        /*String cookieValue = String.format(
-                "access_token=%s; Path=/; Max-Age=%d; HttpOnly; Secure; SameSite=None",
-                token,
-                7 * 24 * 60 * 60
-        );
-        response.addHeader("Set-Cookie", cookieValue);*/
-
+        log.info("USER_LOGIN email={} provider=LOCAL", user.getEmail());
         return ResponseEntity.ok(token);
     }
 

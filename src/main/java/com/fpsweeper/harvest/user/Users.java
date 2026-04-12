@@ -2,6 +2,7 @@ package com.fpsweeper.harvest.user;
 
 import jakarta.persistence.*;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Objects;
 import java.util.UUID;
@@ -48,6 +49,13 @@ public class Users {
 
     @Column(name = "discord_id")  // ✅ Add this
     private String discordId;
+
+    /**
+     * Maximum total virtual credit this user can allocate across simulation bots.
+     * Default: $1,000. Admin can raise this per user.
+     */
+    @Column(name = "simulation_credit_limit", nullable = false, precision = 10, scale = 2)
+    private BigDecimal simulationCreditLimit = new BigDecimal("1000.00");
 
     public String getDiscordId() {
         return discordId;
@@ -164,5 +172,13 @@ public class Users {
 
     public void setTwitterHandle(String twitterHandle) {
         this.twitterHandle = twitterHandle;
+    }
+
+    public BigDecimal getSimulationCreditLimit() {
+        return simulationCreditLimit != null ? simulationCreditLimit : new BigDecimal("1000.00");
+    }
+
+    public void setSimulationCreditLimit(BigDecimal simulationCreditLimit) {
+        this.simulationCreditLimit = simulationCreditLimit;
     }
 }

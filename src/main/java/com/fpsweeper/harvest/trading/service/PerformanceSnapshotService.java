@@ -18,91 +18,98 @@ public class PerformanceSnapshotService {
 
     private static final Logger log = LoggerFactory.getLogger(PerformanceSnapshotService.class);
 
-    @Autowired
-    private TradingBotRepository botRepository;
+    @Autowired private TradingBotRepository      botRepository;
+    @Autowired private BotPerformanceSnapshotRepository snapshotRepository;
+    @Autowired private BotTradeRepository         tradeRepository;
+    @Autowired private BotPositionRepository      positionRepository;
+    @Autowired private TradeExecutionService      tradeExecutionService;
 
-    @Autowired
-    private BotPerformanceSnapshotRepository snapshotRepository;
+    // ── Unrealized P&L refresh ─────────────────────────────────────────────
+    // Runs every 5 minutes for ALL running bots, regardless of their timeframe.
+    // This is what makes the P&L values in the UI feel live.
 
-    @Autowired
-    private BotTradeRepository tradeRepository;
+    @Scheduled(cron = "0 */5 * * * *")
+    public void refreshUnrealizedPnL() {
+        List<TradingBot> activeBots = botRepository.findByStatus(BotStatus.SIMULATING);
 
-    @Autowired
-    private BotPositionRepository positionRepository;
+        if (activeBots.isEmpty()) return;
 
-    /**
-     * Create hourly snapshots for all active and paused bots.
-     * Runs at the top of every hour.
-     */
-    @Scheduled(cron = "0 0 * * * *")
-    public void createHourlySnapshots() {
-        log.info("📸 Creating hourly performance snapshots");
-
-        List<TradingBot> activeBots = botRepository.findAllActiveOrPaused();
+        log.info("💹 Refreshing unrealized P&L for {} running bots", activeBots.size());
 
         for (TradingBot bot : activeBots) {
             try {
-                createSnapshot(bot, SnapshotType.HOURLY);
+                tradeExecutionService.updateUnrealizedPnL(bot);
+            } catch (Exception e) {
+                log.error("❌ Failed to update P&L for bot {}: {}", bot.getName(), e.getMessage());
+            }
+        }
+    }
+
+    // ── Performance snapshots ──────────────────────────────────────────────
+    // Runs every 5 minutes (shifted 2.5 min from P&L refresh so they don't
+    // compete). Captures a balance/P&L snapshot for the equity curve chart.
+
+    @Scheduled(cron = "30 2/5 * * * *")   // at :30 seconds past every 5th minute
+    public void createSnapshots() {
+        List<TradingBot> activeBots = botRepository.findAllActiveOrPaused();
+
+        if (activeBots.isEmpty()) return;
+
+        log.info("📸 Creating performance snapshots for {} bots", activeBots.size());
+
+        for (TradingBot bot : activeBots) {
+            try {
+                createSnapshot(bot, SnapshotType.HOURLY); // reuse HOURLY type — no schema change needed
             } catch (Exception e) {
                 log.error("❌ Error creating snapshot for bot {}: {}", bot.getName(), e.getMessage());
             }
         }
-
-        log.info("✅ Hourly snapshots created for {} bots", activeBots.size());
     }
 
-    /**
-     * Create a performance snapshot for a bot.
-     *
-     * FIX: snapshotTime was relying on the field default (Instant.now() at
-     * object creation), which is fine but we now set it explicitly at the
-     * moment of snapshot creation so the timestamp is precise and testable.
-     */
+    // ── Snapshot builder ───────────────────────────────────────────────────
+
     @Transactional
     public BotPerformanceSnapshot createSnapshot(TradingBot bot, SnapshotType type) {
         log.debug("📊 Creating {} snapshot for bot: {}", type, bot.getName());
 
-        Instant now = Instant.now(); // capture once so all fields use the same timestamp
-
         BotPerformanceSnapshot snapshot = new BotPerformanceSnapshot();
         snapshot.setBotId(bot.getId());
         snapshot.setSnapshotType(type);
-        snapshot.setSnapshotTime(now); // FIX: explicit set
         snapshot.setBalance(bot.getCurrentBalance());
         snapshot.setInitialBalance(bot.getInitialBalance());
 
-        // P&L
-        BigDecimal realizedPnl = positionRepository.getTotalRealizedPnl(bot.getId());
-        BigDecimal unrealizedPnl = positionRepository.getTotalUnrealizedPnl(bot.getId());
-        BigDecimal totalPnl = realizedPnl.add(unrealizedPnl);
+        // P&L — read from positions (already updated by refreshUnrealizedPnL)
+        BigDecimal realizedPnl   = nullSafe(positionRepository.getTotalRealizedPnl(bot.getId()));
+        BigDecimal unrealizedPnl = nullSafe(positionRepository.getTotalUnrealizedPnl(bot.getId()));
+        BigDecimal totalPnl      = realizedPnl.add(unrealizedPnl);
 
         snapshot.setRealizedPnl(realizedPnl);
         snapshot.setUnrealizedPnl(unrealizedPnl);
         snapshot.setTotalPnl(totalPnl);
 
         if (bot.getInitialBalance().compareTo(BigDecimal.ZERO) > 0) {
-            BigDecimal totalPnlPercent = totalPnl
-                    .divide(bot.getInitialBalance(), 4, RoundingMode.HALF_UP)
-                    .multiply(BigDecimal.valueOf(100));
-            snapshot.setTotalPnlPercentage(totalPnlPercent);
+            snapshot.setTotalPnlPercentage(
+                    totalPnl.divide(bot.getInitialBalance(), 4, RoundingMode.HALF_UP)
+                            .multiply(BigDecimal.valueOf(100))
+            );
         }
 
-        // Trade statistics
-        long totalTrades = tradeRepository.countByBotId(bot.getId());
-        long winningTrades = tradeRepository.countProfitableTradesByBotId(bot.getId());
-        long losingTrades = tradeRepository.countLosingTradesByBotId(bot.getId());
+        // Trade stats
+        long totalTrades    = tradeRepository.countByBotId(bot.getId());
+        long winningTrades  = tradeRepository.countProfitableTradesByBotId(bot.getId());
+        long losingTrades   = tradeRepository.countLosingTradesByBotId(bot.getId());
 
         snapshot.setTotalTrades((int) totalTrades);
         snapshot.setWinningTrades((int) winningTrades);
         snapshot.setLosingTrades((int) losingTrades);
         snapshot.calculateWinRate();
 
-        // Position metrics
-        long openPositionsCount = positionRepository.countByBotIdAndStatus(bot.getId(), PositionStatus.OPEN);
-        BigDecimal openPositionsValue = positionRepository.getTotalOpenPositionsValue(bot.getId());
+        // Position stats
+        long openCount          = positionRepository.countByBotIdAndStatus(bot.getId(), PositionStatus.OPEN);
+        BigDecimal openValue    = nullSafe(positionRepository.getTotalOpenPositionsValue(bot.getId()));
 
-        snapshot.setOpenPositionsCount((int) openPositionsCount);
-        snapshot.setOpenPositionsValue(openPositionsValue);
+        snapshot.setOpenPositionsCount((int) openCount);
+        snapshot.setOpenPositionsValue(openValue);
 
         // Trade performance
         snapshot.setAverageWin(tradeRepository.getAverageWin(bot.getId()));
@@ -110,12 +117,10 @@ public class PerformanceSnapshotService {
         snapshot.setLargestWin(tradeRepository.getLargestWin(bot.getId()));
         snapshot.setLargestLoss(tradeRepository.getLargestLoss(bot.getId()));
 
-        // Profit factor
-        BigDecimal avgWin = snapshot.getAverageWin();
+        BigDecimal avgWin  = snapshot.getAverageWin();
         BigDecimal avgLoss = snapshot.getAverageLoss();
         if (avgWin != null && avgLoss != null && avgLoss.compareTo(BigDecimal.ZERO) != 0) {
-            BigDecimal profitFactor = avgWin.abs().divide(avgLoss.abs(), 4, RoundingMode.HALF_UP);
-            snapshot.setProfitFactor(profitFactor);
+            snapshot.setProfitFactor(avgWin.abs().divide(avgLoss.abs(), 4, RoundingMode.HALF_UP));
         }
 
         BotPerformanceSnapshot saved = snapshotRepository.save(snapshot);
@@ -124,5 +129,9 @@ public class PerformanceSnapshotService {
                 totalPnl, snapshot.getTotalPnlPercentage(), snapshot.getWinRate(), totalTrades);
 
         return saved;
+    }
+
+    private BigDecimal nullSafe(BigDecimal value) {
+        return value != null ? value : BigDecimal.ZERO;
     }
 }

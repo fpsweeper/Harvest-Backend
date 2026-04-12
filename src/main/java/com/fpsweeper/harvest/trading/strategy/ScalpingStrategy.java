@@ -30,8 +30,6 @@ public class ScalpingStrategy implements TradingStrategy {
 
     @Override
     public TradeSignal evaluate(TradingBot bot) {
-        log.info("⚡ Evaluating Scalping for bot: {}", bot.getName());
-
         try {
             Map<String, BigDecimal> indicators = indicatorService.calculateIndicators(
                     bot.getTradingPair(), bot.getTimeframe());
@@ -41,8 +39,6 @@ public class ScalpingStrategy implements TradingStrategy {
             BigDecimal currentPrice  = indicators.get("CLOSE_PRICE");
             BigDecimal rsi           = indicators.getOrDefault("RSI_14", BigDecimal.valueOf(50));
             BigDecimal macdHistogram = indicators.getOrDefault("MACD_HISTOGRAM", BigDecimal.ZERO);
-
-            log.info("💹 price: ${} RSI: {} MACD-H: {}", currentPrice, rsi, macdHistogram);
 
             Map<String, Object> config = bot.getConfiguration();
 
@@ -56,8 +52,6 @@ public class ScalpingStrategy implements TradingStrategy {
                     ? bot.getStopLossPercentage()
                     : getConfigValue(config, "tight_stop_loss", DEFAULT_TIGHT_STOP);
 
-            log.info("⚙️ Scalping thresholds — TP: {}% SL: {}%", quickProfit, tightStop);
-
             // ── Exit open positions first ──────────────────────────────────────
             List<BotPosition> openPositions = positionRepository
                     .findByBotIdAndStatus(bot.getId(), PositionStatus.OPEN);
@@ -69,13 +63,15 @@ public class ScalpingStrategy implements TradingStrategy {
                             .multiply(BigDecimal.valueOf(100));
 
                     if (pnlPct.compareTo(quickProfit) >= 0) {
-                        log.info("💰 Quick profit hit! Profit: {}% (target: {}%)", pnlPct, quickProfit);
+                        log.info("🎯 Take profit hit! Bot: {} | Profit: {}% (target: {}%)",
+                                bot.getName(), pnlPct, quickProfit);
                         return TradeSignal.sell(bot.getTradingPair(), position.getQuantity(),
                                 String.format("Take profit: %.2f%%", pnlPct), indicators);
                     }
 
                     if (pnlPct.compareTo(tightStop.negate()) <= 0) {
-                        log.warn("🛑 Stop loss hit! Loss: {}% (limit: {}%)", pnlPct, tightStop);
+                        log.warn("🛑 Stop loss hit! Bot: {} | Loss: {}% (limit: {}%)",
+                                bot.getName(), pnlPct, tightStop);
                         return TradeSignal.sell(bot.getTradingPair(), position.getQuantity(),
                                 String.format("Stop loss: %.2f%%", pnlPct), indicators);
                     }
@@ -113,7 +109,7 @@ public class ScalpingStrategy implements TradingStrategy {
             return TradeSignal.hold("No scalping opportunity");
 
         } catch (Exception e) {
-            log.error("❌ Error evaluating Scalping: {}", e.getMessage(), e);
+            log.error("❌ Error evaluating Scalping strategy for bot {}: {}", bot.getName(), e.getMessage(), e);
             return TradeSignal.hold("Error: " + e.getMessage());
         }
     }
@@ -145,14 +141,9 @@ public class ScalpingStrategy implements TradingStrategy {
                 .multiply(pct)
                 .divide(BigDecimal.valueOf(100), 8, RoundingMode.HALF_UP);
 
-        BigDecimal qty = currentPrice.compareTo(BigDecimal.ZERO) > 0
+        return currentPrice.compareTo(BigDecimal.ZERO) > 0
                 ? positionValue.divide(currentPrice, 8, RoundingMode.HALF_DOWN)
                 : BigDecimal.ZERO;
-
-        log.info("📐 Scalping size | balance: {} | rawPct: {} | normalizedPct: {} | positionValue: {} | qty: {}",
-                balance, rawPct, pct, positionValue, qty);
-
-        return qty;
     }
 
     @SuppressWarnings("unchecked")

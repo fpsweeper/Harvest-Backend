@@ -40,13 +40,13 @@ public class IndicatorService {
      * Calculate all indicators for a symbol
      */
     public Map<String, BigDecimal> calculateIndicators(String symbol, String timeframe) {
-        log.info("🧮 Calculating indicators for {} ({})", symbol, timeframe);
+
 
         // Get historical candles (need at least 200 for accurate indicators)
         List<MarketDataCache> candles = marketDataService.getCandles(symbol, timeframe, 200);
 
         if (candles.isEmpty() || candles.size() < 50) {
-            log.error("❌ Not enough candle data to calculate indicators (need 50+, got {})", candles.size());
+
             return new HashMap<>();
         }
 
@@ -85,7 +85,7 @@ public class IndicatorService {
         // Current Price
         indicators.put("CLOSE_PRICE", getCurrentClosePrice(series));
 
-        log.info("✅ Calculated {} indicators for {}", indicators.size(), symbol);
+
 
         // Update cache with calculated indicators
         updateCacheWithIndicators(candles.get(0), indicators);
@@ -149,7 +149,7 @@ public class IndicatorService {
             return Duration.ofDays(weeks * 7);
         } else {
             // Default to 1 hour
-            log.warn("⚠️ Unknown timeframe format: {}, defaulting to 1 hour", timeframe);
+
             return Duration.ofHours(1);
         }
     }
@@ -298,10 +298,10 @@ public class IndicatorService {
             latestCandle.setUpdatedAt(Instant.now());
 
             marketDataCacheRepository.save(latestCandle);
-            log.debug("📊 Updated cache with calculated indicators");
+
 
         } catch (Exception e) {
-            log.error("❌ Error updating cache with indicators: {}", e.getMessage());
+
         }
     }
 }

@@ -27,7 +27,7 @@ public class StrategyFactory {
     public TradingStrategy getStrategy(TradingBot bot) {
         StrategyType strategyType = bot.getStrategyType();
 
-        log.debug("🏭 Getting strategy: {} for bot: {}", strategyType, bot.getName());
+
 
         switch (strategyType) {
             case DCA:
@@ -40,7 +40,7 @@ public class StrategyFactory {
                 return scalpingStrategy;
 
             default:
-                log.error("❌ Unknown strategy type: {}", strategyType);
+
                 return dcaStrategy; // Fallback
         }
     }

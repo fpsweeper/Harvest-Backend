@@ -1,11 +1,9 @@
 package com.fpsweeper.harvest.trading.service;
 
-import com.fpsweeper.harvest.notification.NotificationService;
 import com.fpsweeper.harvest.trading.*;
 import com.fpsweeper.harvest.trading.dto.BotResponse;
 import com.fpsweeper.harvest.trading.dto.CreateBotRequest;
 import com.fpsweeper.harvest.trading.dto.IndicatorConditionRequest;
-import com.fpsweeper.harvest.trading.dto.UpdateBotRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -29,25 +27,14 @@ public class BotService {
     @Autowired private BotIndicatorConditionRepository conditionRepository;
     @Autowired private BotTradeRepository tradeRepository;
     @Autowired private BotPositionRepository positionRepository;
-    @Autowired private TradeExecutionService tradeExecutionService;
-
-    @Autowired private org.springframework.context.ApplicationEventPublisher eventPublisher;
-
-    @Autowired private NotificationService notificationService;
-
-    private static final List<String> ALLOWED_TIMEFRAMES =
-            List.of("5m", "15m", "30m", "1h", "4h", "1d");
-
-    // ─── Create ────────────────────────────────────────────────────────────────
+    @Autowired private com.fpsweeper.harvest.notification.NotificationService notificationService;
+    @Autowired private com.fpsweeper.harvest.user.UserRepository userRepository;
 
     @Transactional
     public BotResponse createBot(CreateBotRequest request, UUID userId) {
         log.info("🤖 Creating new bot: {} for user: {}", request.getName(), userId);
 
-        if (!ALLOWED_TIMEFRAMES.contains(request.getTimeframe())) {
-            throw new RuntimeException("Minimum timeframe is 5m");
-        }
-
+        // Create bot entity
         TradingBot bot = new TradingBot();
         bot.setUserId(userId);
         bot.setName(request.getName());
@@ -61,205 +48,169 @@ public class BotService {
         bot.setStopLossPercentage(request.getStopLossPercentage());
         bot.setTakeProfitPercentage(request.getTakeProfitPercentage());
         bot.setMaxPositionSizePercentage(request.getMaxPositionSizePercentage());
-        bot.setPointsPerDay(StrategyPointsCost.forStrategy(request.getStrategyType()));
+        bot.setPointsPerDay(request.getPointsPerDay());
         bot.setConfiguration(request.getConfiguration() != null ? request.getConfiguration() : new HashMap<>());
         bot.setExecutionCount(0);
 
         TradingBot savedBot = botRepository.save(bot);
 
-        if (request.getEntryConditions() != null && !request.getEntryConditions().isEmpty())
+        // Create entry conditions
+        if (request.getEntryConditions() != null && !request.getEntryConditions().isEmpty()) {
             saveConditions(savedBot.getId(), request.getEntryConditions(), ConditionType.ENTRY);
-        if (request.getExitConditions() != null && !request.getExitConditions().isEmpty())
-            saveConditions(savedBot.getId(), request.getExitConditions(), ConditionType.EXIT);
+        }
 
-        log.info("✅ Bot created: {} (ID: {})", savedBot.getName(), savedBot.getId());
+        // Create exit conditions
+        if (request.getExitConditions() != null && !request.getExitConditions().isEmpty()) {
+            saveConditions(savedBot.getId(), request.getExitConditions(), ConditionType.EXIT);
+        }
+
+        log.info("✅ Bot created successfully: {} (ID: {})", savedBot.getName(), savedBot.getId());
+
         return convertToResponse(savedBot);
     }
 
-    // ─── Read ──────────────────────────────────────────────────────────────────
+    /**
+     * Save indicator conditions
+     */
+    private void saveConditions(UUID botId, List<IndicatorConditionRequest> conditions, ConditionType type) {
+        int order = 0;
+        for (IndicatorConditionRequest condReq : conditions) {
+            BotIndicatorCondition condition = new BotIndicatorCondition();
+            condition.setBotId(botId);
+            condition.setConditionType(type);
+            condition.setIndicatorName(condReq.getIndicatorName());
+            condition.setIndicatorPeriod(condReq.getIndicatorPeriod());
+            condition.setOperator(condReq.getOperator());
+            condition.setComparisonValue(condReq.getComparisonValue());
+            condition.setLogicalOperator(condReq.getLogicalOperator());
+            condition.setConditionOrder(order++);
 
+            conditionRepository.save(condition);
+        }
+
+
+    }
+
+    /**
+     * Get all bots for a user
+     */
     public List<BotResponse> getUserBots(UUID userId) {
-        return botRepository.findByUserIdOrderByCreatedAtDesc(userId)
-                .stream()
+        List<TradingBot> bots = botRepository.findByUserIdOrderByCreatedAtDesc(userId);
+        return bots.stream()
+                .filter(b -> b.getStatus() != BotStatus.DELETED)
                 .map(this::convertToResponse)
                 .collect(Collectors.toList());
     }
 
+    /**
+     * Get bot by ID
+     */
     public BotResponse getBotById(UUID botId, UUID userId) {
         TradingBot bot = botRepository.findByIdAndUserId(botId, userId)
                 .orElseThrow(() -> new RuntimeException("Bot not found or access denied"));
+
         return convertToResponse(bot);
     }
 
-    // ─── Lifecycle ─────────────────────────────────────────────────────────────
-
+    /**
+     * Start a bot
+     */
     @Transactional
     public BotResponse startBot(UUID botId, UUID userId) {
         TradingBot bot = botRepository.findByIdAndUserId(botId, userId)
                 .orElseThrow(() -> new RuntimeException("Bot not found or access denied"));
 
-        if (!bot.canStart())
+        if (!bot.canStart()) {
             throw new RuntimeException("Bot cannot be started in current status: " + bot.getStatus());
+        }
 
         bot.setStatus(BotStatus.SIMULATING);
         bot.setStartedAt(Instant.now());
-        // nextExecutionTime = now so scheduler picks it up on the very next cycle
-        bot.setNextExecutionTime(Instant.now());
+        bot.setNextExecutionTime(Instant.now()); // Execute immediately on next scheduler run
 
-        TradingBot saved = botRepository.save(bot);
-        log.info("▶️ Bot started: {} (ID: {})", saved.getName(), saved.getId());
+        TradingBot savedBot = botRepository.save(bot);
 
-        notificationService.notifyBotStarted(saved.getUserId(), saved.getName(), saved.getTradingPair(), saved.getTimeframe());
+        log.info("▶️ Bot started: {} (ID: {})", savedBot.getName(), savedBot.getId());
 
-        // ✅ No immediate execution thread.
-        // The previous new Thread(() -> executeSingleBot()) caused a race condition
-        // on Render + Supabase: the background thread read a stale DB connection
-        // that still showed the bot as CREATED, causing silent failures and making
-        // the UI flip back to Ready status.
-        // The scheduler runs every 5 minutes and will execute this bot on its
-        // next cycle since nextExecutionTime is set to Instant.now().
-
-        // ✅ Publish event — listener fires AFTER this transaction commits
-        eventPublisher.publishEvent(new BotStartedEvent(saved.getId()));
-
-        return convertToResponse(saved);
+        return convertToResponse(savedBot);
     }
 
+    /**
+     * Pause a bot
+     */
     @Transactional
     public BotResponse pauseBot(UUID botId, UUID userId) {
         TradingBot bot = botRepository.findByIdAndUserId(botId, userId)
                 .orElseThrow(() -> new RuntimeException("Bot not found or access denied"));
 
-        if (!bot.canPause())
+        if (!bot.canPause()) {
             throw new RuntimeException("Bot cannot be paused in current status: " + bot.getStatus());
+        }
 
         bot.setStatus(BotStatus.PAUSED);
         bot.setPausedAt(Instant.now());
 
-        TradingBot saved = botRepository.save(bot);
-        log.info("⏸️ Bot paused: {} (ID: {})", saved.getName(), saved.getId());
+        TradingBot savedBot = botRepository.save(bot);
 
-        notificationService.notifyBotPaused(saved.getUserId(), saved.getName());
-        return convertToResponse(saved);
+        log.info("⏸️ Bot paused: {} (ID: {})", savedBot.getName(), savedBot.getId());
+
+        return convertToResponse(savedBot);
     }
 
+    /**
+     * Stop a bot (closes all positions)
+     */
     @Transactional
     public BotResponse stopBot(UUID botId, UUID userId) {
         TradingBot bot = botRepository.findByIdAndUserId(botId, userId)
                 .orElseThrow(() -> new RuntimeException("Bot not found or access denied"));
 
-        if (!bot.canStop())
+        if (!bot.canStop()) {
             throw new RuntimeException("Bot cannot be stopped in current status: " + bot.getStatus());
-
-        List<BotPosition> openPositions = positionRepository
-                .findByBotIdAndStatus(botId, PositionStatus.OPEN);
-
-        if (!openPositions.isEmpty()) {
-            log.info("🔒 Closing {} open position(s) for bot: {}", openPositions.size(), bot.getName());
-            for (BotPosition position : openPositions) {
-                try {
-                    tradeExecutionService.executeSell(
-                            bot,
-                            position.getSymbol(),
-                            position.getQuantity(),
-                            "Position closed — bot stopped"
-                    );
-                } catch (Exception e) {
-                    log.error("❌ Failed to close position {}: {}", position.getId(), e.getMessage());
-                }
-            }
         }
+
+        // TODO: Close all open positions before stopping
+        // For now, just change status
 
         bot.setStatus(BotStatus.STOPPED);
         bot.setStoppedAt(Instant.now());
 
-        TradingBot saved = botRepository.save(bot);
-        log.info("⏹️ Bot stopped: {} (ID: {})", saved.getName(), saved.getId());
+        TradingBot savedBot = botRepository.save(bot);
 
-        notificationService.notifyBotStopped(saved.getUserId(), saved.getName());
+        log.info("⏹️ Bot stopped: {} (ID: {})", savedBot.getName(), savedBot.getId());
 
-        return convertToResponse(saved);
+        return convertToResponse(savedBot);
     }
 
+    /**
+     * Delete a bot
+     */
     @Transactional
     public void deleteBot(UUID botId, UUID userId) {
         TradingBot bot = botRepository.findByIdAndUserId(botId, userId)
                 .orElseThrow(() -> new RuntimeException("Bot not found or access denied"));
 
-        if (!bot.canDelete())
-            throw new RuntimeException("Bot cannot be deleted in current status: " + bot.getStatus());
+        if (bot.getStatus() == BotStatus.DELETED) {
+            throw new RuntimeException("Bot is already deleted");
+        }
+
+        // Auto-stop if running or paused — no need to force user to stop first
+        if (bot.getStatus() == BotStatus.SIMULATING || bot.getStatus() == BotStatus.PAUSED) {
+            bot.setStatus(BotStatus.STOPPED);
+            bot.setStoppedAt(Instant.now());
+        }
 
         bot.setStatus(BotStatus.DELETED);
         bot.setDeletedAt(Instant.now());
         botRepository.save(bot);
+
+        notificationService.notifyBotDeleted(userId, bot.getName());
         log.info("🗑️ Bot deleted: {} (ID: {})", bot.getName(), bot.getId());
     }
 
-    // ─── Update ────────────────────────────────────────────────────────────────
-
-    @Transactional
-    public BotResponse updateBot(UUID botId, UUID userId, UpdateBotRequest request) {
-
-        if (request.getTimeframe() != null && !ALLOWED_TIMEFRAMES.contains(request.getTimeframe())) {
-            throw new RuntimeException("Minimum timeframe is 5m");
-        }
-
-        TradingBot bot = botRepository.findByIdAndUserId(botId, userId)
-                .orElseThrow(() -> new RuntimeException("Bot not found or access denied"));
-
-        if (bot.getStatus() == BotStatus.SIMULATING)
-            throw new RuntimeException("Pause the bot before editing its configuration");
-
-        long openCount = positionRepository.countByBotIdAndStatus(botId, PositionStatus.OPEN);
-        if (openCount > 0)
-            throw new RuntimeException(
-                    "Cannot edit bot while it has " + openCount +
-                            " open position(s). Stop the bot first to close them.");
-
-        if (request.getName() != null)                      bot.setName(request.getName());
-        if (request.getDescription() != null)               bot.setDescription(request.getDescription());
-        if (request.getTradingPair() != null)               bot.setTradingPair(request.getTradingPair());
-        if (request.getTimeframe() != null)                 bot.setTimeframe(request.getTimeframe());
-        if (request.getStopLossPercentage() != null)        bot.setStopLossPercentage(request.getStopLossPercentage());
-        if (request.getTakeProfitPercentage() != null)      bot.setTakeProfitPercentage(request.getTakeProfitPercentage());
-        if (request.getMaxPositionSizePercentage() != null) bot.setMaxPositionSizePercentage(request.getMaxPositionSizePercentage());
-        if (request.getConfiguration() != null)             bot.setConfiguration(request.getConfiguration());
-
-        bot.setNextExecutionTime(null);
-
-        TradingBot saved = botRepository.save(bot);
-
-        if (request.getEntryConditions() != null || request.getExitConditions() != null) {
-            conditionRepository.deleteByBotId(botId);
-            if (request.getEntryConditions() != null)
-                saveConditions(botId, request.getEntryConditions(), ConditionType.ENTRY);
-            if (request.getExitConditions() != null)
-                saveConditions(botId, request.getExitConditions(), ConditionType.EXIT);
-        }
-
-        log.info("✏️ Bot updated: {} (ID: {})", saved.getName(), saved.getId());
-        return convertToResponse(saved);
-    }
-
-    // ─── Helpers ───────────────────────────────────────────────────────────────
-
-    private void saveConditions(UUID botId, List<IndicatorConditionRequest> conditions, ConditionType type) {
-        int order = 0;
-        for (IndicatorConditionRequest req : conditions) {
-            BotIndicatorCondition cond = new BotIndicatorCondition();
-            cond.setBotId(botId);
-            cond.setConditionType(type);
-            cond.setIndicatorName(req.getIndicatorName());
-            cond.setIndicatorPeriod(req.getIndicatorPeriod());
-            cond.setOperator(req.getOperator());
-            cond.setComparisonValue(req.getComparisonValue());
-            cond.setLogicalOperator(req.getLogicalOperator());
-            cond.setConditionOrder(order++);
-            conditionRepository.save(cond);
-        }
-        log.debug("💾 Saved {} {} conditions", conditions.size(), type);
-    }
-
+    /**
+     * Convert entity to response DTO
+     */
     private BotResponse convertToResponse(TradingBot bot) {
         BotResponse response = new BotResponse();
         response.setId(bot.getId());
@@ -280,10 +231,8 @@ public class BotService {
         response.setNextExecutionTime(bot.getNextExecutionTime());
         response.setConfiguration(bot.getConfiguration());
 
-        BigDecimal realizedPnl   = positionRepository.getTotalRealizedPnl(bot.getId());
-        BigDecimal unrealizedPnl = positionRepository.getTotalUnrealizedPnl(bot.getId());
-        BigDecimal totalPnl      = realizedPnl.add(unrealizedPnl);
-
+        // Calculate P&L
+        BigDecimal totalPnl = bot.getCurrentBalance().subtract(bot.getInitialBalance());
         response.setTotalPnl(totalPnl);
 
         if (bot.getInitialBalance().compareTo(BigDecimal.ZERO) > 0) {
@@ -293,9 +242,9 @@ public class BotService {
             response.setTotalPnlPercentage(pnlPercent);
         }
 
+        // Count trades and positions
         response.setTotalTrades((int) tradeRepository.countByBotId(bot.getId()));
-        response.setOpenPositions((int) positionRepository.countByBotIdAndStatus(
-                bot.getId(), PositionStatus.OPEN));
+        response.setOpenPositions((int) positionRepository.countByBotIdAndStatus(bot.getId(), PositionStatus.OPEN));
 
         return response;
     }

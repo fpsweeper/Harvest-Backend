@@ -27,88 +27,76 @@ public class MarketDataService {
     private MarketDataCacheRepository marketDataCacheRepository;
 
     /**
-     * Get current price — always fresh from Binance.
+     * Get current price (always fetch fresh from Binance)
      */
     public BigDecimal getCurrentPrice(String symbol) {
         return binanceApiService.getCurrentPrice(symbol);
     }
 
     /**
-     * Get historical candles with timeframe-aware caching.
-     *
-     * Cache TTL = half the candle interval, so data is always reasonably current:
-     *   5m  → stale after 2.5 min   (was: stale after 60 min — broken for short TFs)
-     *   15m → stale after 7.5 min
-     *   1h  → stale after 30 min
-     *   4h  → stale after 2 h
-     *   1d  → stale after 12 h
+     * Get historical candles with caching
+     * @param symbol Trading pair (BTCUSDT)
+     * @param timeframe Interval (1h, 4h, 1d)
+     * @param limit Number of candles
+     * @return List of cached market data
      */
     public List<MarketDataCache> getCandles(String symbol, String timeframe, int limit) {
+        // First, try to get from cache
         List<MarketDataCache> cachedData = marketDataCacheRepository
                 .findBySymbolAndTimeframeOrderByOpenTimeDesc(symbol, timeframe);
 
+        // If we have enough cached data and it's recent, use it
         if (!cachedData.isEmpty() && cachedData.size() >= limit) {
-            Instant latestTime  = cachedData.get(0).getOpenTime();
-            long    ttlSeconds  = getCacheTtlSeconds(timeframe);
+            Instant latestTime = cachedData.get(0).getOpenTime();
+            Instant now = Instant.now();
 
-            if (latestTime.plusSeconds(ttlSeconds).isAfter(Instant.now())) {
-                log.info("📦 Using cached data for {} ({}): {} candles", symbol, timeframe, cachedData.size());
+            // If latest data is less than 1 hour old, use cache
+            if (latestTime.plusSeconds(3600).isAfter(now)) {
+
                 return cachedData.stream().limit(limit).collect(Collectors.toList());
             }
         }
 
-        log.info("🔄 Fetching fresh data from Binance for {} ({})...", symbol, timeframe);
+        // Otherwise, fetch fresh data from Binance
+
         return fetchAndCacheCandles(symbol, timeframe, limit);
     }
 
     /**
-     * Cache TTL = half the candle duration in seconds.
-     */
-    private long getCacheTtlSeconds(String timeframe) {
-        return switch (timeframe.toLowerCase()) {
-            case "1m"  -> 30;
-            case "3m"  -> 90;
-            case "5m"  -> 150;
-            case "15m" -> 450;
-            case "30m" -> 900;
-            case "1h"  -> 1800;
-            case "2h"  -> 3600;
-            case "4h"  -> 7200;
-            case "6h"  -> 10800;
-            case "12h" -> 21600;
-            case "1d"  -> 43200;
-            case "1w"  -> 302400;
-            default    -> 300;
-        };
-    }
-
-    /**
-     * Fetch from Binance and upsert into cache.
+     * Fetch candles from Binance and cache them
      */
     private List<MarketDataCache> fetchAndCacheCandles(String symbol, String timeframe, int limit) {
         try {
+            // Fetch from Binance
             List<BinanceKlineResponse> klines = binanceApiService.getKlines(symbol, timeframe, limit);
 
             if (klines.isEmpty()) {
-                log.error("❌ No klines returned from Binance for {} ({})", symbol, timeframe);
-                return returnStaleOrEmpty(symbol, timeframe, limit);
+
+                return List.of();
             }
 
+            // Convert to MarketDataCache and save
             List<MarketDataCache> cacheEntries = klines.stream().map(kline -> {
-                Instant openTime  = Instant.ofEpochMilli(kline.getOpenTime());
+                Instant openTime = Instant.ofEpochMilli(kline.getOpenTime());
                 Instant closeTime = Instant.ofEpochMilli(kline.getCloseTime());
 
+                // Check if already exists
                 Optional<MarketDataCache> existing = marketDataCacheRepository
                         .findBySymbolAndTimeframeAndOpenTime(symbol, timeframe, openTime);
 
-                MarketDataCache cache = existing.orElseGet(() -> {
-                    MarketDataCache c = new MarketDataCache();
-                    c.setSymbol(symbol);
-                    c.setTimeframe(timeframe);
-                    c.setOpenTime(openTime);
-                    return c;
-                });
+                MarketDataCache cache;
+                if (existing.isPresent()) {
+                    // Update existing
+                    cache = existing.get();
+                } else {
+                    // Create new
+                    cache = new MarketDataCache();
+                    cache.setSymbol(symbol);
+                    cache.setTimeframe(timeframe);
+                    cache.setOpenTime(openTime);
+                }
 
+                // Set/update candle data
                 cache.setCloseTime(closeTime);
                 cache.setOpenPrice(kline.getOpen());
                 cache.setHighPrice(kline.getHigh());
@@ -122,33 +110,32 @@ public class MarketDataService {
                 return cache;
             }).collect(Collectors.toList());
 
+            // Save all to database
             marketDataCacheRepository.saveAll(cacheEntries);
-            log.info("✅ Cached {} candles for {} ({})", cacheEntries.size(), symbol, timeframe);
+
+
+
             return cacheEntries;
 
         } catch (Exception e) {
-            log.error("❌ Error fetching candles for {} ({}): {}", symbol, timeframe, e.getMessage());
-            return returnStaleOrEmpty(symbol, timeframe, limit);
+
+            throw new RuntimeException("Failed to fetch market data", e);
         }
     }
 
-    private List<MarketDataCache> returnStaleOrEmpty(String symbol, String timeframe, int limit) {
-        List<MarketDataCache> stale = marketDataCacheRepository
-                .findBySymbolAndTimeframeOrderByOpenTimeDesc(symbol, timeframe);
-        if (!stale.isEmpty()) {
-            log.warn("⚠️  Returning stale cache ({} candles) for {} ({})", stale.size(), symbol, timeframe);
-            return stale.stream().limit(limit).collect(Collectors.toList());
-        }
-        return List.of();
-    }
-
+    /**
+     * Get latest candle (most recent)
+     */
     public Optional<MarketDataCache> getLatestCandle(String symbol, String timeframe) {
         return marketDataCacheRepository.findFirstBySymbolAndTimeframeOrderByOpenTimeDesc(symbol, timeframe);
     }
 
+    /**
+     * Clear old cached data (cleanup)
+     */
     public void clearOldCache(int daysToKeep) {
         Instant cutoff = Instant.now().minusSeconds(daysToKeep * 24L * 3600L);
         marketDataCacheRepository.deleteByOpenTimeBefore(cutoff);
-        log.info("🗑️ Cleared cached data older than {} days", daysToKeep);
+
     }
 }

@@ -43,11 +43,8 @@ public class ConditionEvaluator {
             String timeframe
     ) {
         if (conditions.isEmpty()) {
-            log.warn("⚠️ No conditions to evaluate");
             return false;
         }
-
-        log.debug("🔍 Evaluating {} conditions", conditions.size());
 
         // Lazy-load previous candle only if a cross condition exists
         Map<String, BigDecimal> previousIndicators = null;
@@ -64,12 +61,6 @@ public class ConditionEvaluator {
         for (BotIndicatorCondition condition : conditions) {
             boolean conditionMet = evaluateSingleCondition(condition, indicators, previousIndicators);
 
-            log.debug("   {} {} {} = {}",
-                    condition.getIndicatorName(),
-                    condition.getOperator(),
-                    condition.getComparisonValue(),
-                    conditionMet ? "✅" : "❌");
-
             if (isFirst) {
                 result = conditionMet;
                 isFirst = false;
@@ -82,7 +73,6 @@ public class ConditionEvaluator {
             }
         }
 
-        log.info("🎯 Condition result: {}", result ? "✅ MET" : "❌ NOT MET");
         return result;
     }
 
@@ -128,33 +118,17 @@ public class ConditionEvaluator {
                 return currentValue.compareTo(comparisonValue) != 0;
 
             case "crosses_above":
-                // Current candle is above threshold, previous candle was below
-                // e.g. "MACD crosses_above 0" = MACD just turned positive
-                if (previous == null) {
-                    log.warn("⚠️ crosses_above: no previous candle data available, returning false");
-                    return false;
-                }
+                if (previous == null) return false;
                 BigDecimal prevValueAbove = previous.get(indicatorName);
-                if (prevValueAbove == null) {
-                    log.warn("⚠️ crosses_above: {} not in previous candle indicators", indicatorName);
-                    return false;
-                }
+                if (prevValueAbove == null) return false;
                 // Current > threshold AND previous <= threshold
                 return currentValue.compareTo(comparisonValue) > 0
                         && prevValueAbove.compareTo(comparisonValue) <= 0;
 
             case "crosses_below":
-                // Current candle is below threshold, previous candle was above
-                // e.g. "RSI crosses_below 70" = RSI just left overbought zone
-                if (previous == null) {
-                    log.warn("⚠️ crosses_below: no previous candle data available, returning false");
-                    return false;
-                }
+                if (previous == null) return false;
                 BigDecimal prevValueBelow = previous.get(indicatorName);
-                if (prevValueBelow == null) {
-                    log.warn("⚠️ crosses_below: {} not in previous candle indicators", indicatorName);
-                    return false;
-                }
+                if (prevValueBelow == null) return false;
                 // Current < threshold AND previous >= threshold
                 return currentValue.compareTo(comparisonValue) < 0
                         && prevValueBelow.compareTo(comparisonValue) >= 0;
@@ -176,29 +150,27 @@ public class ConditionEvaluator {
 
             // Index 0 = most recent (current), index 1 = previous candle
             if (candles.size() < 2) {
-                log.warn("⚠️ Not enough candles for cross detection ({} candles)", candles.size());
                 return null;
             }
 
             MarketDataCache prev = candles.get(1);
 
-            // Build indicator map from cached values
             Map<String, BigDecimal> prevIndicators = new java.util.HashMap<>();
-            if (prev.getRsi14() != null)        prevIndicators.put("RSI_14", prev.getRsi14());
-            if (prev.getRsi7() != null)         prevIndicators.put("RSI_7", prev.getRsi7());
-            if (prev.getMacd() != null)         prevIndicators.put("MACD", prev.getMacd());
-            if (prev.getMacdSignal() != null)   prevIndicators.put("MACD_SIGNAL", prev.getMacdSignal());
+            if (prev.getRsi14() != null)         prevIndicators.put("RSI_14",         prev.getRsi14());
+            if (prev.getRsi7() != null)          prevIndicators.put("RSI_7",          prev.getRsi7());
+            if (prev.getMacd() != null)          prevIndicators.put("MACD",           prev.getMacd());
+            if (prev.getMacdSignal() != null)    prevIndicators.put("MACD_SIGNAL",    prev.getMacdSignal());
             if (prev.getMacdHistogram() != null) prevIndicators.put("MACD_HISTOGRAM", prev.getMacdHistogram());
-            if (prev.getMa20() != null)         prevIndicators.put("MA_20", prev.getMa20());
-            if (prev.getMa50() != null)         prevIndicators.put("MA_50", prev.getMa50());
-            if (prev.getMa100() != null)        prevIndicators.put("MA_100", prev.getMa100());
-            if (prev.getMa200() != null)        prevIndicators.put("MA_200", prev.getMa200());
-            if (prev.getEma12() != null)        prevIndicators.put("EMA_12", prev.getEma12());
-            if (prev.getEma26() != null)        prevIndicators.put("EMA_26", prev.getEma26());
-            if (prev.getBbUpper() != null)      prevIndicators.put("BB_UPPER", prev.getBbUpper());
-            if (prev.getBbMiddle() != null)     prevIndicators.put("BB_MIDDLE", prev.getBbMiddle());
-            if (prev.getBbLower() != null)      prevIndicators.put("BB_LOWER", prev.getBbLower());
-            if (prev.getClosePrice() != null)   prevIndicators.put("CLOSE_PRICE", prev.getClosePrice());
+            if (prev.getMa20() != null)          prevIndicators.put("MA_20",          prev.getMa20());
+            if (prev.getMa50() != null)          prevIndicators.put("MA_50",          prev.getMa50());
+            if (prev.getMa100() != null)         prevIndicators.put("MA_100",         prev.getMa100());
+            if (prev.getMa200() != null)         prevIndicators.put("MA_200",         prev.getMa200());
+            if (prev.getEma12() != null)         prevIndicators.put("EMA_12",         prev.getEma12());
+            if (prev.getEma26() != null)         prevIndicators.put("EMA_26",         prev.getEma26());
+            if (prev.getBbUpper() != null)       prevIndicators.put("BB_UPPER",       prev.getBbUpper());
+            if (prev.getBbMiddle() != null)      prevIndicators.put("BB_MIDDLE",      prev.getBbMiddle());
+            if (prev.getBbLower() != null)       prevIndicators.put("BB_LOWER",       prev.getBbLower());
+            if (prev.getClosePrice() != null)    prevIndicators.put("CLOSE_PRICE",    prev.getClosePrice());
 
             return prevIndicators;
 

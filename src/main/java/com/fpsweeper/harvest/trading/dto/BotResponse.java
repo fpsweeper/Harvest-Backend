@@ -2,6 +2,7 @@ package com.fpsweeper.harvest.trading.dto;
 
 import com.fpsweeper.harvest.trading.BotStatus;
 import com.fpsweeper.harvest.trading.StrategyType;
+import com.fpsweeper.harvest.trading.TradingMode;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -36,6 +37,9 @@ public class BotResponse {
     private Instant nextExecutionTime;
 
     private Map<String, Object> configuration;
+
+    private TradingMode tradingMode;
+    private boolean virtualCredit;
 
     // Getters and Setters
     public UUID getId() {
@@ -205,4 +209,10 @@ public class BotResponse {
     public void setConfiguration(Map<String, Object> configuration) {
         this.configuration = configuration;
     }
+
+    public TradingMode getTradingMode() { return tradingMode; }
+    public void setTradingMode(TradingMode tradingMode) { this.tradingMode = tradingMode; }
+
+    public boolean isVirtualCredit() { return virtualCredit; }
+    public void setVirtualCredit(boolean virtualCredit) { this.virtualCredit = virtualCredit; }
 }

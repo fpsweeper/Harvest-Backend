@@ -65,6 +65,17 @@ public class TradingBot {
     @Column(name = "points_per_day", nullable = false, precision = 6, scale = 2)
     private BigDecimal pointsPerDay = new BigDecimal("1.00");
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "trading_mode", nullable = false, length = 20)
+    private TradingMode tradingMode = TradingMode.SIMULATION;
+
+    /**
+     * true  = balance is virtual credit (free $1000 granted by platform)
+     * false = balance came from real user deposit (LIVE mode only, future)
+     */
+    @Column(name = "virtual_credit", nullable = false)
+    private boolean virtualCredit = true;
+
     @Column(name = "total_points_consumed", precision = 10, scale = 2)
     private BigDecimal totalPointsConsumed = BigDecimal.ZERO;
 
@@ -360,4 +371,10 @@ public class TradingBot {
     public void setPositions(List<BotPosition> positions) {
         this.positions = positions;
     }
+
+    public TradingMode getTradingMode() { return tradingMode; }
+    public void setTradingMode(TradingMode tradingMode) { this.tradingMode = tradingMode; }
+
+    public boolean isVirtualCredit() { return virtualCredit; }
+    public void setVirtualCredit(boolean virtualCredit) { this.virtualCredit = virtualCredit; }
 }

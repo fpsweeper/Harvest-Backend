@@ -1,6 +1,7 @@
 package com.fpsweeper.harvest.trading.dto;
 
 import com.fpsweeper.harvest.trading.StrategyType;
+import com.fpsweeper.harvest.trading.TradingMode;
 import jakarta.validation.constraints.*;
 
 import java.math.BigDecimal;
@@ -18,6 +19,8 @@ public class CreateBotRequest {
 
     @NotNull(message = "Strategy type is required")
     private StrategyType strategyType;
+
+    private TradingMode tradingMode = TradingMode.SIMULATION;
 
     @NotBlank(message = "Trading pair is required")
     @Pattern(regexp = "^[A-Z]{3,10}USDT$", message = "Trading pair must end with USDT (e.g., BTCUSDT)")
@@ -44,6 +47,9 @@ public class CreateBotRequest {
     @DecimalMin(value = "1.0", message = "Min position size is 1%")
     @DecimalMax(value = "100.0", message = "Max position size is 100%")
     private BigDecimal maxPositionSizePercentage;
+
+    @DecimalMin(value = "1.0", message = "Points per day must be at least 1")
+    private BigDecimal pointsPerDay = BigDecimal.valueOf(10);
 
     // Entry conditions
     private List<IndicatorConditionRequest> entryConditions;
@@ -95,6 +101,9 @@ public class CreateBotRequest {
         this.timeframe = timeframe;
     }
 
+    public TradingMode getTradingMode() { return tradingMode; }
+    public void setTradingMode(TradingMode tradingMode) { this.tradingMode = tradingMode; }
+
     public BigDecimal getInitialBalance() {
         return initialBalance;
     }
@@ -125,6 +134,14 @@ public class CreateBotRequest {
 
     public void setMaxPositionSizePercentage(BigDecimal maxPositionSizePercentage) {
         this.maxPositionSizePercentage = maxPositionSizePercentage;
+    }
+
+    public BigDecimal getPointsPerDay() {
+        return pointsPerDay;
+    }
+
+    public void setPointsPerDay(BigDecimal pointsPerDay) {
+        this.pointsPerDay = pointsPerDay;
     }
 
     public List<IndicatorConditionRequest> getEntryConditions() {

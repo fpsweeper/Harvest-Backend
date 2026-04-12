@@ -29,6 +29,8 @@ import java.util.stream.Collectors;
 @CrossOrigin(origins = "*")
 public class AdminController {
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(AdminController.class);
+
     // ── Repositories & Services ──────────────────────────────────────────────
 
     @Autowired
@@ -176,6 +178,8 @@ public class AdminController {
                 long depositCount = depositRepository.countByUserId(u.getId());
                 dto.put("totalDeposits", depositCount);
 
+                dto.put("simulationCreditLimit", u.getSimulationCreditLimit());
+
                 return dto;
             }).collect(Collectors.toList());
 
@@ -277,6 +281,61 @@ public class AdminController {
         u.setUpdatedAt(Instant.now());
         userRepository.save(u);
         return ResponseEntity.ok(Map.of("message", "User status set to " + status));
+    }
+
+    /**
+     * PUT /api/admin/users/{userId}/simulation-credit
+     * Body: { "limit": 2500.00 }
+     * Set a custom virtual credit limit for a specific user.
+     * Minimum: $1,000 (platform default). Maximum: $100,000.
+     */
+    @PutMapping("/users/{userId}/simulation-credit")
+    public ResponseEntity<?> setSimulationCreditLimit(
+            @AuthenticationPrincipal Users admin,
+            @PathVariable UUID userId,
+            @RequestBody Map<String, Object> body
+    ) {
+        ResponseEntity<?> guard = requireAdmin(admin);
+        if (guard != null) return guard;
+
+        try {
+            BigDecimal limit = new BigDecimal(body.get("limit").toString());
+
+            if (limit.compareTo(new BigDecimal("100")) < 0) {
+                return ResponseEntity.badRequest()
+                        .body(Map.of("error", "Minimum simulation credit limit is $100"));
+            }
+            if (limit.compareTo(new BigDecimal("100000")) > 0) {
+                return ResponseEntity.badRequest()
+                        .body(Map.of("error", "Maximum simulation credit limit is $100,000"));
+            }
+
+            Optional<Users> opt = userRepository.findById(userId);
+            if (opt.isEmpty()) {
+                return ResponseEntity.status(404).body(Map.of("error", "User not found"));
+            }
+
+            Users user = opt.get();
+            BigDecimal oldLimit = user.getSimulationCreditLimit();
+            user.setSimulationCreditLimit(limit);
+            user.setUpdatedAt(Instant.now());
+            userRepository.save(user);
+
+            log.info("🔧 Admin {} set simulation credit for user {} from ${} to ${}",
+                    admin.getEmail(), user.getEmail(), oldLimit, limit);
+
+            return ResponseEntity.ok(Map.of(
+                    "message", String.format("Simulation credit limit for %s set to $%.2f", user.getEmail(), limit),
+                    "userId",   userId,
+                    "email",    user.getEmail(),
+                    "oldLimit", oldLimit,
+                    "newLimit", limit
+            ));
+        } catch (NumberFormatException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Invalid limit value"));
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body(Map.of("error", e.getMessage()));
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════

@@ -5,6 +5,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -27,8 +28,6 @@ public interface TradingBotRepository extends JpaRepository<TradingBot, UUID> {
      *
      * Fixed query treats NULL as "execute immediately".
      */
-    // FIX: Reference enum constants with fully-qualified name instead of string literals.
-    // JPQL string literals like 'SIMULATING' cause a type mismatch when the entity field is an enum.
     @Query("SELECT b FROM TradingBot b WHERE b.status = com.fpsweeper.harvest.trading.BotStatus.SIMULATING " +
             "AND (b.nextExecutionTime IS NULL OR b.nextExecutionTime <= :now)")
     List<TradingBot> findBotsReadyForExecution(@Param("now") Instant now);
@@ -48,4 +47,17 @@ public interface TradingBotRepository extends JpaRepository<TradingBot, UUID> {
     List<TradingBot> findStoppedBotsBefore(@Param("cutoffTime") Instant cutoffTime);
 
     long countByStatus(BotStatus status);
+
+    /**
+     * Total virtual credit currently allocated to a user across all non-deleted bots.
+     * Uses initialBalance because currentBalance fluctuates during simulation,
+     * but the credit the platform granted is always tracked by initialBalance.
+     *
+     * Returns 0 if the user has no virtual credit bots yet (COALESCE handles NULL).
+     */
+    @Query("SELECT COALESCE(SUM(b.initialBalance), 0) FROM TradingBot b " +
+            "WHERE b.userId = :userId " +
+            "AND b.virtualCredit = true " +
+            "AND b.status <> com.fpsweeper.harvest.trading.BotStatus.DELETED")
+    BigDecimal sumVirtualCreditByUserId(@Param("userId") UUID userId);
 }

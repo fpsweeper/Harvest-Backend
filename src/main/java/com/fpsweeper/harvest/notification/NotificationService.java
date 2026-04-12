@@ -87,6 +87,14 @@ public class NotificationService {
         create(userId, NotificationType.BOT_AUTO_PAUSED, "⚠️ Bot Auto-Paused", msg, botName, null, null);
     }
 
+    /** Called when a user deletes a bot from the UI. */
+    @Async
+    @Transactional
+    public void notifyBotDeleted(UUID userId, String botName) {
+        String msg = String.format("Bot \"%s\" has been deleted and removed from your account.", botName);
+        create(userId, NotificationType.BOT_STOPPED, "🗑️ Bot Deleted", msg, botName, null, null);
+    }
+
     // ── Points & wallet ────────────────────────────────────────────────────────
 
     @Async
@@ -140,7 +148,6 @@ public class NotificationService {
             repository.save(n);
             log.debug("🔔 Notification created for user {}: {}", userId, title);
         } catch (Exception e) {
-            // Never let notification failure break the main flow
             log.error("❌ Failed to create notification for user {}: {}", userId, e.getMessage());
         }
     }

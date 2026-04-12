@@ -1,7 +1,8 @@
 package com.fpsweeper.harvest.points;
 
 import com.fpsweeper.harvest.auth.exceptions.InsufficientPointsException;
-import com.fpsweeper.harvest.notification.NotificationService;
+import com.fpsweeper.harvest.trading.TradingBot;
+import com.fpsweeper.harvest.trading.TradingMode;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -19,13 +20,13 @@ import java.util.UUID;
 @Service
 public class PointsService {
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(PointsService.class);
+
     @Autowired
     private UserPointsRepository userPointsRepository;
 
     @Autowired
     private PointTransactionRepository transactionRepository;
-
-    @Autowired private NotificationService notificationService;
 
     /**
      * Get user's current point balance
@@ -132,8 +133,44 @@ public class PointsService {
 
         System.out.println("✅ Deducted " + amount + " points from user " + userId +
                 ". New balance: " + balanceAfter);
+    }
 
-        if( balanceAfter.compareTo(new BigDecimal(10)) < 0) notificationService.notifyLowPoints(userId, balanceAfter);
+    /**
+     * Deduct points for a bot execution — mode-aware.
+     *
+     * SIMULATION bots: always a no-op. They run on free virtual credit and must
+     * never touch the user's real deposited points balance under any circumstances.
+     *
+     * LIVE bots (future): deduct from real points balance as normal.
+     *
+     * This is the ONLY method that should be called from the execution pipeline.
+     * Never call deductPoints() directly from bot execution code.
+     */
+    @Transactional(isolation = Isolation.SERIALIZABLE)
+    public void deductPointsForBot(TradingBot bot) throws InsufficientPointsException {
+        // Simulation bots are free — skip entirely
+        if (bot.getTradingMode() == TradingMode.SIMULATION || bot.isVirtualCredit()) {
+            log.debug("⏭️ Skipping point deduction for simulation bot: {}", bot.getName());
+            return;
+        }
+
+        // LIVE bots: deduct real points
+        BigDecimal cost = bot.getPointsPerDay() != null ? bot.getPointsPerDay() : BigDecimal.ONE;
+        String desc = "Bot execution: " + bot.getName() + " (" + bot.getTradingMode() + ")";
+        deductPoints(bot.getUserId(), cost, desc, bot.getId());
+        log.info("💰 Deducted {} points from user {} for LIVE bot {}",
+                cost, bot.getUserId(), bot.getName());
+    }
+
+    /**
+     * Check if user has enough points — simulation bots always return true.
+     */
+    public boolean hasEnoughPointsForBot(TradingBot bot) {
+        if (bot.getTradingMode() == TradingMode.SIMULATION || bot.isVirtualCredit()) {
+            return true; // Simulation is always free
+        }
+        BigDecimal cost = bot.getPointsPerDay() != null ? bot.getPointsPerDay() : BigDecimal.ONE;
+        return hasEnoughPoints(bot.getUserId(), cost);
     }
 
     /**
