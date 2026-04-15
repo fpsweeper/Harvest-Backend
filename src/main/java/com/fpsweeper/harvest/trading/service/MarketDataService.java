@@ -74,9 +74,10 @@ public class MarketDataService {
                 return persistAndReturn(klines, symbol, timeframe, limit);
             }
         } catch (Exception e) {
-            // Suppress geo-restriction noise — it's expected in restricted regions
-            if (e.getMessage() != null && !e.getMessage().contains("451")) {
-                log.error("❌ Binance error for {} ({}): {}", symbol, timeframe, e.getMessage());
+            String msg = e.getMessage() != null ? e.getMessage() : "";
+            // 451 = geo-restricted — expected in restricted regions, suppress completely
+            if (!msg.contains("451")) {
+                log.error("❌ Binance error for {} ({}): {}", symbol, timeframe, msg);
             }
         }
 
@@ -115,13 +116,24 @@ public class MarketDataService {
     private List<MarketDataCache> persistAndReturn(
             List<BinanceKlineResponse> klines, String symbol, String timeframe, int limit) {
 
-        List<MarketDataCache> entries = klines.stream().map(k -> {
+        // Batch-fetch all existing candles for this symbol/timeframe in one query
+        // to avoid N individual findBySymbolAndTimeframeAndOpenTime calls
+        List<MarketDataCache> existing = marketDataCacheRepository
+                .findBySymbolAndTimeframeOrderByOpenTimeDesc(symbol, timeframe);
+
+        java.util.Map<Instant, MarketDataCache> existingByTime = existing.stream()
+                .collect(java.util.stream.Collectors.toMap(
+                        MarketDataCache::getOpenTime,
+                        c -> c,
+                        (a, b) -> a // keep first on duplicate
+                ));
+
+        List<MarketDataCache> toSave = klines.stream().map(k -> {
             Instant openTime  = Instant.ofEpochMilli(k.getOpenTime());
             Instant closeTime = Instant.ofEpochMilli(k.getCloseTime());
 
-            MarketDataCache cache = marketDataCacheRepository
-                    .findBySymbolAndTimeframeAndOpenTime(symbol, timeframe, openTime)
-                    .orElseGet(MarketDataCache::new);
+            // Reuse existing entity (has ID) → triggers UPDATE not INSERT
+            MarketDataCache cache = existingByTime.getOrDefault(openTime, new MarketDataCache());
 
             cache.setSymbol(symbol);
             cache.setTimeframe(timeframe);
@@ -138,9 +150,15 @@ public class MarketDataService {
             return cache;
         }).collect(Collectors.toList());
 
-        marketDataCacheRepository.saveAll(entries);
+        try {
+            marketDataCacheRepository.saveAll(toSave);
+        } catch (Exception e) {
+            // If a race condition still causes a duplicate, log and continue —
+            // the existing cached data is still valid
+            log.warn("⚠️ Could not persist candles for {} ({}): {}", symbol, timeframe, e.getMessage());
+        }
 
-        return entries.stream()
+        return toSave.stream()
                 .sorted((a, b) -> b.getOpenTime().compareTo(a.getOpenTime()))
                 .limit(limit)
                 .collect(Collectors.toList());
