@@ -1,76 +1,32 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <configuration>
 
-    <!-- ── Console appender ─────────────────────────────────────────────── -->
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
             <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
         </encoder>
     </appender>
 
-    <!-- ── DB appender ──────────────────────────────────────────────────── -->
-    <!--
-        Writes log events to the app_logs table via JDBC.
-        Uses a separate connection string to avoid Hibernate circular dependency.
-        Only stores WARN+ for external libs; DEBUG+ for our own code.
-    -->
-    <appender name="DB" class="ch.qos.logback.classic.db.DBAppender">
-        <connectionSource class="ch.qos.logback.core.db.DriverManagerConnectionSource">
-            <driverClass>org.postgresql.Driver</driverClass>
-            <!-- Uses the same DB as the app — resolved from env at startup -->
-            <url>${DB_URL:-jdbc:postgresql://aws-1-eu-central-1.pooler.supabase.com:6543/postgres?prepareThreshold=0}</url>
-            <user>${DB_USERNAME:-postgres.rebdpjjwdoewdnigfbmq}</user>
-            <password>${DB_PASSWORD:-Harvest_19952026}</password>
-        </connectionSource>
-        <!-- Only persist WARN and above to avoid flooding the DB -->
-        <filter class="ch.qos.logback.classic.filter.ThresholdFilter">
-            <level>INFO</level>
-        </filter>
-    </appender>
-
-    <!-- Async wrapper to avoid blocking the main thread on DB writes -->
-    <appender name="ASYNC_DB" class="ch.qos.logback.classic.AsyncAppender">
-        <queueSize>512</queueSize>
-        <discardingThreshold>0</discardingThreshold>
-        <appender-ref ref="DB" />
-    </appender>
-
-    <!-- ── Package-level config ──────────────────────────────────────────── -->
-
-    <!-- Our own code: DEBUG and above -->
-    <logger name="com.fpsweeper.harvest" level="DEBUG" additivity="false">
+    <!-- Our application — INFO and above -->
+    <logger name="com.fpsweeper.harvest" level="INFO" additivity="false">
         <appender-ref ref="CONSOLE" />
-        <appender-ref ref="ASYNC_DB" />
     </logger>
 
     <!--
-        BinanceApiService: suppress the repetitive 451 geo-block errors.
-        These fire every 5 min for every bot — they are expected in restricted
-        regions and handled by the CryptoCompare fallback. OFF silences them
-        completely. Any real Binance errors are caught and re-logged by
-        MarketDataService with context.
+        BinanceApiService: silenced completely.
+        451 geo-block errors fire every 5 min per bot in restricted regions.
+        The CryptoCompare fallback in MarketDataService handles this transparently.
+        Any real errors are re-caught and logged by MarketDataService with context.
     -->
     <logger name="com.fpsweeper.harvest.trading.binance.BinanceApiService" level="OFF" additivity="false" />
 
-    <!-- Spring framework: INFO and above (console only — not DB) -->
-    <logger name="org.springframework" level="INFO" additivity="false">
-        <appender-ref ref="CONSOLE" />
-    </logger>
+    <!-- Reduce framework noise -->
+    <logger name="org.springframework"    level="WARN" />
+    <logger name="org.hibernate"          level="WARN" />
+    <logger name="com.zaxxer.hikari"      level="WARN" />
 
-    <!-- Hibernate SQL: only in dev — set to WARN in prod -->
-    <logger name="org.hibernate.SQL" level="WARN" additivity="false">
-        <appender-ref ref="CONSOLE" />
-    </logger>
-
-    <!-- Reduce noise from Hikari -->
-    <logger name="com.zaxxer.hikari" level="WARN" additivity="false">
-        <appender-ref ref="CONSOLE" />
-    </logger>
-
-    <!-- Root: WARN and above goes to both console and DB -->
     <root level="WARN">
         <appender-ref ref="CONSOLE" />
-        <appender-ref ref="ASYNC_DB" />
     </root>
 
 </configuration>
